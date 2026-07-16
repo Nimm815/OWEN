@@ -1027,6 +1027,7 @@ height:420px;
 
 /* Guest button */
 .guest-btn{
+    margin-top: 20px;
     padding: 10px 18px;
     background: transparent;
     border: 1px dashed #ccc;
