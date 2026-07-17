@@ -233,6 +233,28 @@ app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+// Admin orders list
+app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(`
+      SELECT o.Id as id,
+             o.OrderCode as orderCode,
+             COALESCE(u.Name, 'Khách vãng lai') as customerName,
+             o.Status as status,
+             o.PaymentMethod as paymentMethod,
+             o.TotalAmount as totalAmount,
+             o.CreatedAt as createdAt
+      FROM Orders o
+      LEFT JOIN Users u ON u.Id = o.UserId
+      ORDER BY o.CreatedAt DESC
+    `);
+    return res.json({ orders: rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi lấy danh sách đơn hàng.' });
+  }
+});
+
 // Admin stats (basic)
 app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
   try {
