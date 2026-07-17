@@ -13,22 +13,24 @@ async function run() {
     connectionLimit: 5
   });
 
-  const name = 'Demo User';
-  const email = 'demo@owen.vn';
-  const password = 'Demo@123'; // mật khẩu demo (thay đổi nếu cần)
-  const passwordHash = await bcrypt.hash(password, 10);
+  const users = [
+    { name: 'Admin User', email: 'admin@owen.vn', password: 'Admin@123', role: 'ADMIN' },
+    { name: 'Demo User', email: 'demo@owen.vn', password: 'Demo@123', role: 'ROLE_USER' }
+  ];
 
   try {
-    const [rows] = await pool.execute('SELECT Id FROM Users WHERE Email = ?', [email]);
-    if (rows.length) {
-      console.log('User already exists:', email);
-    } else {
-      const [res] = await pool.execute('INSERT INTO Users (Name, Email, PasswordHash) VALUES (?, ?, ?)', [name, email, passwordHash]);
-      console.log('Inserted demo user id =', res.insertId);
-      console.log('Email:', email, 'Password:', password);
+    for (const item of users) {
+      const passwordHash = await bcrypt.hash(item.password, 10);
+      const [rows] = await pool.execute('SELECT Id FROM Users WHERE Email = ?', [item.email]);
+      if (rows.length) {
+        console.log('User already exists:', item.email);
+      } else {
+        const [res] = await pool.execute('INSERT INTO Users (Name, Email, PasswordHash, Role) VALUES (?, ?, ?, ?)', [item.name, item.email, passwordHash, item.role]);
+        console.log('Inserted user id =', res.insertId, 'email =', item.email, 'role =', item.role);
+      }
     }
   } catch (err) {
-    console.error('Error seeding user:', err);
+    console.error('Error seeding users:', err);
   } finally {
     await pool.end();
   }
