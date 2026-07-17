@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OWEN Admin</title>
+  <link rel="stylesheet" href="/assets/css/admin/admin.css">
+</head>
+<body>
+  <div class="admin-app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">OWEN Admin</div>
+      <nav>
+        <ul>
+          <li data-page="dashboard" class="active">Dashboard</li>
+          <li data-page="products">Products</li>
+          <li data-page="orders">Orders</li>
+          <li data-page="users">Users</li>
+          <li data-page="settings">Settings</li>
+        </ul>
+      </nav>
+      <div class="sidebar-footer">© 2026 OWEN</div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button id="toggleSidebar" class="btn">☰</button>
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="topbar-actions">
+          <button id="logoutBtn" class="btn">Logout</button>
+        </div>
+      </header>
+
+      <section class="content" id="mainContent">
+        <!-- Dynamic admin content will be loaded here -->
+        <div class="dashboard-cards" id="dashboardCards">
+          <div class="card">
+            <h3>Total Products</h3>
+            <p id="totalProducts">—</p>
+          </div>
+          <div class="card">
+            <h3>Total Users</h3>
+            <p id="totalUsers">—</p>
+          </div>
+        </div>
+
+        <div id="pageArea"></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/assets/js/admin/admin.js"></script>
+</body>
+</html>

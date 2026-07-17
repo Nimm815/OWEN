@@ -31,6 +31,11 @@ app.use('/Images', express.static(path.join(__dirname, 'Images')));
 app.use('/style.css', express.static(path.join(__dirname, 'style.css')));
 app.use('/script.js', express.static(path.join(__dirname, 'script.js')));
 
+// Admin static assets and admin UI
+app.use('/admin', express.static(path.join(__dirname, 'admin')));
+app.use('/assets/css/admin', express.static(path.join(__dirname, 'assets', 'css', 'admin')));
+app.use('/assets/js/admin', express.static(path.join(__dirname, 'assets', 'js', 'admin')));
+
 const poolConfig = {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
@@ -57,16 +62,16 @@ let pool;
 })();
 
 function generateToken(user) {
-  return jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '12h' });
+  return jwt.sign({ id: user.id, email: user.email, role: user.role || 'ROLE_USER' }, jwtSecret, { expiresIn: '12h' });
 }
 
 async function getUserByEmail(email) {
-  const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email, PasswordHash as passwordHash FROM Users WHERE Email = ?', [email]);
+  const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email, PasswordHash as passwordHash, Role as role FROM Users WHERE Email = ?', [email]);
   return rows[0];
 }
 
-async function createUser(name, email, passwordHash) {
-  const [result] = await pool.execute('INSERT INTO Users (Name, Email, PasswordHash) VALUES (?, ?, ?)', [name, email, passwordHash]);
+async function createUser(name, email, passwordHash, role = 'ROLE_USER') {
+  const [result] = await pool.execute('INSERT INTO Users (Name, Email, PasswordHash, Role) VALUES (?, ?, ?, ?)', [name, email, passwordHash, role]);
   return { id: result.insertId };
 }
 
@@ -74,7 +79,8 @@ function buildUserResponse(user) {
   return {
     id: user.id,
     name: user.name,
-    email: user.email
+    email: user.email,
+    role: user.role || 'ROLE_USER'
   };
 }
 
@@ -144,13 +150,98 @@ function authenticateToken(req, res, next) {
 
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email FROM Users WHERE Id = ?', [req.user.id]);
+    const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email, Role as role FROM Users WHERE Id = ?', [req.user.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ message: 'Người dùng không tồn tại.' });
     return res.json({ user: buildUserResponse(user) });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: 'Lỗi máy chủ.' });
+  }
+});
+
+// Admin check middleware
+async function isAdmin(req, res, next) {
+  if (!req.user || !req.user.id) return res.sendStatus(401);
+  try {
+    const [rows] = await pool.execute('SELECT Role as role FROM Users WHERE Id = ?', [req.user.id]);
+    const user = rows[0];
+    if (!user || (user.role !== 'ADMIN' && user.role !== 'ROLE_ADMIN')) {
+      return res.status(403).json({ message: 'Forbidden: admin only' });
+    }
+    next();
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi máy chủ.' });
+  }
+}
+
+// Admin product management (basic CRUD)
+app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.execute('SELECT Id as id, Title as title, Description as description, Price as price, ImageUrl as imageUrl, CreatedAt as createdAt FROM Products ORDER BY Id DESC');
+    return res.json({ products: rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi lấy sản phẩm.' });
+  }
+});
+
+app.post('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
+  const { title, description, price, imageUrl } = req.body;
+  if (!title || typeof price === 'undefined') return res.status(400).json({ message: 'Thiếu thông tin bắt buộc.' });
+  try {
+    const [result] = await pool.execute('INSERT INTO Products (Title, Description, Price, ImageUrl) VALUES (?, ?, ?, ?)', [title, description || null, price, imageUrl || null]);
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi tạo sản phẩm.' });
+  }
+});
+
+app.put('/api/admin/products/:id', authenticateToken, isAdmin, async (req, res) => {
+  const id = req.params.id;
+  const { title, description, price, imageUrl } = req.body;
+  try {
+    const [result] = await pool.execute('UPDATE Products SET Title = ?, Description = ?, Price = ?, ImageUrl = ? WHERE Id = ?', [title, description, price, imageUrl, id]);
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi cập nhật sản phẩm.' });
+  }
+});
+
+app.delete('/api/admin/products/:id', authenticateToken, isAdmin, async (req, res) => {
+  const id = req.params.id;
+  try {
+    const [result] = await pool.execute('DELETE FROM Products WHERE Id = ?', [id]);
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi xóa sản phẩm.' });
+  }
+});
+
+// Admin - list users
+app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email, Role as role, CreatedAt as createdAt FROM Users ORDER BY Id DESC');
+    return res.json({ users: rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi lấy danh sách người dùng.' });
+  }
+});
+
+// Admin stats (basic)
+app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [[{ cnt: totalProducts }]] = await pool.query('SELECT COUNT(*) as cnt FROM Products');
+    const [[{ cnt: totalUsers }]] = await pool.query('SELECT COUNT(*) as cnt FROM Users');
+    return res.json({ totalProducts, totalUsers });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi khi lấy thống kê.' });
   }
 });
 
