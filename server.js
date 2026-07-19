@@ -176,10 +176,18 @@ async function isAdmin(req, res, next) {
   }
 }
 
-// Admin product management (basic CRUD)
+function isPositiveNumber(value) {
+  return Number.isFinite(Number(value)) && Number(value) >= 0;
+}
+
+function isValidOrderStatus(value) {
+  return ['UNPAID', 'PENDING', 'SHIPPING', 'DELIVERED', 'CANCELLED'].includes(value);
+}
+
+// Admin product management
 app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT Id as id, Title as title, Description as description, Price as price, ImageUrl as imageUrl, CreatedAt as createdAt FROM Products ORDER BY Id DESC');
+    const [rows] = await pool.execute(`SELECT p.Id as id, p.SKU as sku, p.Title as title, p.Description as description, p.Price as price, p.ImageUrl as imageUrl, p.BrandId as brandId, p.CategoryId as categoryId, p.IsActive as isActive, p.CreatedAt as createdAt, b.Name as brandName, c.Name as categoryName FROM Products p JOIN Brands b ON b.Id = p.BrandId LEFT JOIN Categories c ON c.Id = p.CategoryId ORDER BY p.Id DESC`);
     return res.json({ products: rows });
   } catch (err) {
     console.error(err);
@@ -188,10 +196,11 @@ app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
 });
 
 app.post('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
-  const { title, description, price, imageUrl } = req.body;
+  const { sku, title, description, price, imageUrl, brandId, categoryId, isActive } = req.body;
   if (!title || typeof price === 'undefined') return res.status(400).json({ message: 'Thiếu thông tin bắt buộc.' });
   try {
-    const [result] = await pool.execute('INSERT INTO Products (Title, Description, Price, ImageUrl) VALUES (?, ?, ?, ?)', [title, description || null, price, imageUrl || null]);
+    if (!sku || !isPositiveNumber(price) || !brandId) return res.status(400).json({ message: 'SKU, price and brand are required.' });
+    const [result] = await pool.execute('INSERT INTO Products (SKU, Title, Description, Price, ImageUrl, BrandId, CategoryId, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [sku.trim(), title.trim(), description || null, Number(price), imageUrl || null, Number(brandId), categoryId ? Number(categoryId) : null, isActive === false || isActive === 0 ? 0 : 1]);
     return res.status(201).json({ id: result.insertId });
   } catch (err) {
     console.error(err);
@@ -201,9 +210,11 @@ app.post('/api/admin/products', authenticateToken, isAdmin, async (req, res) => 
 
 app.put('/api/admin/products/:id', authenticateToken, isAdmin, async (req, res) => {
   const id = req.params.id;
-  const { title, description, price, imageUrl } = req.body;
+  const { sku, title, description, price, imageUrl, brandId, categoryId, isActive } = req.body;
   try {
-    const [result] = await pool.execute('UPDATE Products SET Title = ?, Description = ?, Price = ?, ImageUrl = ? WHERE Id = ?', [title, description, price, imageUrl, id]);
+    if (!sku || !title || !isPositiveNumber(price) || !brandId) return res.status(400).json({ message: 'SKU, title, price and brand are required.' });
+    const [result] = await pool.execute('UPDATE Products SET SKU = ?, Title = ?, Description = ?, Price = ?, ImageUrl = ?, BrandId = ?, CategoryId = ?, IsActive = ? WHERE Id = ?', [sku.trim(), title.trim(), description || null, Number(price), imageUrl || null, Number(brandId), categoryId ? Number(categoryId) : null, isActive === false || isActive === 0 ? 0 : 1, id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Product not found.' });
     return res.json({ affectedRows: result.affectedRows });
   } catch (err) {
     console.error(err);
@@ -215,10 +226,22 @@ app.delete('/api/admin/products/:id', authenticateToken, isAdmin, async (req, re
   const id = req.params.id;
   try {
     const [result] = await pool.execute('DELETE FROM Products WHERE Id = ?', [id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Product not found.' });
     return res.json({ affectedRows: result.affectedRows });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Lỗi khi xóa sản phẩm.' });
+  }
+});
+
+app.get('/api/admin/catalog', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [brands] = await pool.execute('SELECT Id as id, Name as name FROM Brands ORDER BY Name');
+    const [categories] = await pool.execute('SELECT Id as id, Name as name FROM Categories ORDER BY Name');
+    return res.json({ brands, categories });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to load product catalog.' });
   }
 });
 
@@ -233,6 +256,52 @@ app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+app.post('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !password || password.length < 6) return res.status(400).json({ message: 'Name, email and password (at least 6 characters) are required.' });
+  if (!['ADMIN', 'ROLE_ADMIN', 'ROLE_USER'].includes(role || 'ROLE_USER')) return res.status(400).json({ message: 'Invalid role.' });
+  try {
+    const passwordHash = await bcrypt.hash(password, 10);
+    const [result] = await pool.execute('INSERT INTO Users (Name, Email, PasswordHash, Role) VALUES (?, ?, ?, ?)', [name.trim(), email.trim(), passwordHash, role || 'ROLE_USER']);
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Email already exists.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to create user.' });
+  }
+});
+
+app.put('/api/admin/users/:id', authenticateToken, isAdmin, async (req, res) => {
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !['ADMIN', 'ROLE_ADMIN', 'ROLE_USER'].includes(role)) return res.status(400).json({ message: 'Name, email and a valid role are required.' });
+  if (password && password.length < 6) return res.status(400).json({ message: 'Password must have at least 6 characters.' });
+  try {
+    const params = [name.trim(), email.trim(), role];
+    let sql = 'UPDATE Users SET Name = ?, Email = ?, Role = ?';
+    if (password) { sql += ', PasswordHash = ?'; params.push(await bcrypt.hash(password, 10)); }
+    sql += ' WHERE Id = ?'; params.push(req.params.id);
+    const [result] = await pool.execute(sql, params);
+    if (!result.affectedRows) return res.status(404).json({ message: 'User not found.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Email already exists.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to update user.' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authenticateToken, isAdmin, async (req, res) => {
+  if (Number(req.params.id) === req.user.id) return res.status(400).json({ message: 'You cannot delete your own account.' });
+  try {
+    const [result] = await pool.execute('DELETE FROM Users WHERE Id = ?', [req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'User not found.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to delete user.' });
+  }
+});
+
 // Admin orders list
 app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -240,6 +309,10 @@ app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
       SELECT o.Id as id,
              o.OrderCode as orderCode,
              COALESCE(u.Name, 'Khách vãng lai') as customerName,
+             o.RecipientName as recipientName,
+             o.RecipientPhone as recipientPhone,
+             o.RecipientAddress as recipientAddress,
+             o.Note as note,
              o.Status as status,
              o.PaymentMethod as paymentMethod,
              o.TotalAmount as totalAmount,
@@ -252,6 +325,43 @@ app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Lỗi khi lấy danh sách đơn hàng.' });
+  }
+});
+
+app.post('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
+  const { orderCode, recipientName, recipientPhone, recipientAddress, paymentMethod, status, totalAmount, note } = req.body;
+  if (!orderCode || !recipientName || !recipientPhone || !recipientAddress || !['COD', 'VNPAY'].includes(paymentMethod) || !isValidOrderStatus(status) || !isPositiveNumber(totalAmount)) return res.status(400).json({ message: 'Please provide all required order details.' });
+  try {
+    const [result] = await pool.execute('INSERT INTO Orders (OrderCode, RecipientName, RecipientPhone, RecipientAddress, PaymentMethod, Status, TotalAmount, Note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [orderCode.trim(), recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), paymentMethod, status, Number(totalAmount), note || null]);
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Order code already exists.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to create order.' });
+  }
+});
+
+app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) => {
+  const { recipientName, recipientPhone, recipientAddress, paymentMethod, status, totalAmount, note } = req.body;
+  if (!recipientName || !recipientPhone || !recipientAddress || !['COD', 'VNPAY'].includes(paymentMethod) || !isValidOrderStatus(status) || !isPositiveNumber(totalAmount)) return res.status(400).json({ message: 'Please provide all required order details.' });
+  try {
+    const [result] = await pool.execute('UPDATE Orders SET RecipientName = ?, RecipientPhone = ?, RecipientAddress = ?, PaymentMethod = ?, Status = ?, TotalAmount = ?, Note = ? WHERE Id = ?', [recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), paymentMethod, status, Number(totalAmount), note || null, req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Order not found.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to update order.' });
+  }
+});
+
+app.delete('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.execute('DELETE FROM Orders WHERE Id = ?', [req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Order not found.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to delete order.' });
   }
 });
 
