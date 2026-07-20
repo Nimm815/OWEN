@@ -1085,3 +1085,73 @@ height:420px;
 }
 
 }
+
+.products-section{
+
+    padding:80px 50px 110px;
+
+}
+
+.section-heading{
+
+    text-align:center;
+    margin-bottom:35px;
+
+}
+
+.section-heading p,
+.product-category{
+
+    font-size:11px;
+    letter-spacing:2px;
+    color:#777;
+    margin:0 0 10px;
+
+}
+
+.section-heading h2{
+
+    margin:0;
+    font-size:34px;
+    font-weight:300;
+    letter-spacing:2px;
+
+}
+
+.products-section .gallery{
+
+    padding:0;
+
+}
+
+.product-card-content{
+
+    padding:18px 18px 20px;
+
+}
+
+.product-card h3{
+
+    margin:0;
+    min-height:auto;
+    font-size:17px;
+    line-height:1.45;
+
+}
+
+.product-price{
+
+    margin:12px 0 0;
+    font-weight:600;
+    font-size:15px;
+
+}
+
+.products-message{
+
+    grid-column:1 / -1;
+    text-align:center;
+    padding:45px 0;
+    color:#666;
+
+}

@@ -184,6 +184,45 @@ function isValidOrderStatus(value) {
   return ['UNPAID', 'PENDING', 'SHIPPING', 'DELIVERED', 'CANCELLED'].includes(value);
 }
 
+// Public storefront: only expose products that are available to customers.
+// This endpoint is intentionally separate from the admin API, which includes
+// inactive products so they can still be edited or restored by an administrator.
+app.get('/api/products', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 48);
+    const category = typeof req.query.category === 'string' ? req.query.category.trim() : '';
+    const parameters = [];
+    let categoryFilter = '';
+    if (category) {
+      categoryFilter = ' AND c.Name = ?';
+      parameters.push(category);
+    }
+    const [products] = await pool.execute(
+      `SELECT p.Id AS id,
+              p.SKU AS sku,
+              p.Title AS title,
+              p.Description AS description,
+              p.Price AS price,
+              p.ImageUrl AS imageUrl,
+              b.Name AS brandName,
+              c.Name AS categoryName
+       FROM Products p
+       INNER JOIN Brands b ON b.Id = p.BrandId
+       LEFT JOIN Categories c ON c.Id = p.CategoryId
+       WHERE p.IsActive = 1
+       ${categoryFilter}
+       ORDER BY p.CreatedAt DESC, p.Id DESC
+       LIMIT ${limit}`,
+      parameters
+    );
+    return res.json({ products });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải sản phẩm.' });
+  }
+});
+
 // Admin product management
 app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -197,24 +236,43 @@ app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
 
 app.post('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
   const { sku, title, description, price, imageUrl, brandId, categoryId, isActive } = req.body;
+  let connection;
   if (!title || typeof price === 'undefined') return res.status(400).json({ message: 'Thiếu thông tin bắt buộc.' });
   try {
     if (!sku || !isPositiveNumber(price) || !brandId) return res.status(400).json({ message: 'SKU, price and brand are required.' });
-    const [result] = await pool.execute('INSERT INTO Products (SKU, Title, Description, Price, ImageUrl, BrandId, CategoryId, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [sku.trim(), title.trim(), description || null, Number(price), imageUrl || null, Number(brandId), categoryId ? Number(categoryId) : null, isActive === false || isActive === 0 ? 0 : 1]);
+    const primaryImageUrl = typeof imageUrl === 'string' ? imageUrl.trim() : '';
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [result] = await connection.execute('INSERT INTO Products (SKU, Title, Description, Price, ImageUrl, BrandId, CategoryId, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [sku.trim(), title.trim(), description || null, Number(price), primaryImageUrl || null, Number(brandId), categoryId ? Number(categoryId) : null, isActive === false || isActive === 0 ? 0 : 1]);
+    if (primaryImageUrl) await connection.execute('INSERT INTO ProductImages (ProductId, ImageUrl, Position) VALUES (?, ?, 1)', [result.insertId, primaryImageUrl]);
+    await connection.commit();
     return res.status(201).json({ id: result.insertId });
   } catch (err) {
+    if (connection) await connection.rollback();
     console.error(err);
     return res.status(500).json({ message: 'Lỗi khi tạo sản phẩm.' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 app.put('/api/admin/products/:id', authenticateToken, isAdmin, async (req, res) => {
   const id = req.params.id;
   const { sku, title, description, price, imageUrl, brandId, categoryId, isActive } = req.body;
+  let connection;
   try {
     if (!sku || !title || !isPositiveNumber(price) || !brandId) return res.status(400).json({ message: 'SKU, title, price and brand are required.' });
-    const [result] = await pool.execute('UPDATE Products SET SKU = ?, Title = ?, Description = ?, Price = ?, ImageUrl = ?, BrandId = ?, CategoryId = ?, IsActive = ? WHERE Id = ?', [sku.trim(), title.trim(), description || null, Number(price), imageUrl || null, Number(brandId), categoryId ? Number(categoryId) : null, isActive === false || isActive === 0 ? 0 : 1, id]);
+    const primaryImageUrl = typeof imageUrl === 'string' ? imageUrl.trim() : '';
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [result] = await connection.execute('UPDATE Products SET SKU = ?, Title = ?, Description = ?, Price = ?, ImageUrl = ?, BrandId = ?, CategoryId = ?, IsActive = ? WHERE Id = ?', [sku.trim(), title.trim(), description || null, Number(price), primaryImageUrl || null, Number(brandId), categoryId ? Number(categoryId) : null, isActive === false || isActive === 0 ? 0 : 1, id]);
     if (!result.affectedRows) return res.status(404).json({ message: 'Product not found.' });
+    if (primaryImageUrl) {
+      await connection.execute('INSERT INTO ProductImages (ProductId, ImageUrl, Position) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE ImageUrl = VALUES(ImageUrl)', [id, primaryImageUrl]);
+    } else {
+      await connection.execute('DELETE FROM ProductImages WHERE ProductId = ? AND Position = 1', [id]);
+    }
+    await connection.commit();
     return res.json({ affectedRows: result.affectedRows });
   } catch (err) {
     console.error(err);
@@ -237,7 +295,7 @@ app.delete('/api/admin/products/:id', authenticateToken, isAdmin, async (req, re
 app.get('/api/admin/catalog', authenticateToken, isAdmin, async (req, res) => {
   try {
     const [brands] = await pool.execute('SELECT Id as id, Name as name FROM Brands ORDER BY Name');
-    const [categories] = await pool.execute('SELECT Id as id, Name as name FROM Categories ORDER BY Name');
+    const [categories] = await pool.execute("SELECT Id as id, Name as name FROM Categories WHERE Name IN ('Men', 'Women', 'Collection') ORDER BY FIELD(Name, 'Men', 'Women', 'Collection')");
     return res.json({ brands, categories });
   } catch (err) {
     console.error(err);

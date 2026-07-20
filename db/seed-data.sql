@@ -13,11 +13,11 @@ INSERT INTO Brands (Name) VALUES
   ('OWEN Essentials')
 ON DUPLICATE KEY UPDATE Name = VALUES(Name);
 
--- Sample categories
+-- Storefront categories.  Each product is assigned to one of these pages.
 INSERT INTO Categories (Name) VALUES
-  ('Outerwear'),
-  ('Knitwear'),
-  ('Footwear')
+  ('Men'),
+  ('Women'),
+  ('Collection')
 ON DUPLICATE KEY UPDATE Name = VALUES(Name);
 
 -- Sample colors

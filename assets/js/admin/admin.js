@@ -99,7 +99,7 @@ function productForm(product = {}) {
     { name: 'sku', label: 'SKU', value: product.sku, required: true }, { name: 'title', label: 'Name', value: product.title, required: true },
     { name: 'price', label: 'Price', type: 'number', value: product.price, required: true }, { name: 'imageUrl', label: 'Image URL', value: product.imageUrl },
     { name: 'brandId', label: 'Brand', type: 'select', value: product.brandId || catalog.brands[0]?.id, required: true, options: catalog.brands.map(x => ({ value: x.id, label: x.name })) },
-    { name: 'categoryId', label: 'Category', type: 'select', value: product.categoryId || '', options: [{ value: '', label: 'No category' }, ...catalog.categories.map(x => ({ value: x.id, label: x.name }))] },
+    { name: 'categoryId', label: 'Display page', type: 'select', value: product.categoryId || catalog.categories[0]?.id, required: true, options: catalog.categories.map(x => ({ value: x.id, label: x.name })) },
     { name: 'description', label: 'Description', type: 'textarea', value: product.description }, { name: 'isActive', label: 'Active product', type: 'checkbox', value: product.id ? Boolean(product.isActive) : true }
   ], async data => { await request(`/api/admin/products${product.id ? `/${product.id}` : ''}`, { method: product.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); loadPage('products'); });
 }

@@ -38,6 +38,85 @@ observer.observe(item);
 
 const API_BASE_URL = 'http://localhost:3000';
 
+// ================= STOREFRONT PRODUCTS =================
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+    }[character]));
+}
+
+function productImageUrl(imageUrl) {
+    if (!imageUrl) return '/Images/card_reveal1.jpg';
+    if (/^https?:\/\//i.test(imageUrl) || imageUrl.startsWith('/')) return imageUrl;
+    return `/${imageUrl.replace(/^\.\.\//, '')}`;
+}
+
+function formatPrice(price) {
+    return `${Number(price || 0).toLocaleString('vi-VN')} đ`;
+}
+
+async function loadHomepageProducts() {
+    const gallery = document.getElementById('productGallery');
+    if (!gallery) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/products?limit=6`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể tải sản phẩm.');
+
+        const products = data.products || [];
+        if (!products.length) {
+            gallery.innerHTML = '<p class="products-message">Chưa có sản phẩm nào để hiển thị.</p>';
+            return;
+        }
+
+        gallery.innerHTML = products.map(product => `
+            <article class="card product-card">
+                <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
+                <div class="product-card-content">
+                    <p class="product-category">${escapeHtml(product.categoryName || product.brandName || 'OWEN')}</p>
+                    <h3>${escapeHtml(product.title)}</h3>
+                    <p class="product-price">${formatPrice(product.price)}</p>
+                </div>
+            </article>`).join('');
+    } catch (error) {
+        console.error(error);
+        gallery.innerHTML = '<p class="products-message">Không thể tải sản phẩm. Vui lòng thử lại sau.</p>';
+    }
+}
+
+async function loadCategoryProducts() {
+    const grid = document.getElementById('productGrid');
+    if (!grid) return;
+
+    const category = grid.dataset.storeCategory;
+    grid.innerHTML = '<p class="products-message">Đang tải sản phẩm...</p>';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/products?limit=48&category=${encodeURIComponent(category)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể tải sản phẩm.');
+
+        const products = data.products || [];
+        if (!products.length) {
+            grid.innerHTML = `<p class="products-message">Chưa có sản phẩm nào trong mục ${escapeHtml(category)}.</p>`;
+            return;
+        }
+
+        grid.classList.remove('lookbook');
+        grid.classList.add('product-grid');
+        grid.innerHTML = products.map(product => `
+            <article class="product-card">
+                <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
+                <h3>${escapeHtml(product.title)}</h3>
+                <p>${formatPrice(product.price)}</p>
+            </article>`).join('');
+    } catch (error) {
+        console.error(error);
+        grid.innerHTML = '<p class="products-message">Không thể tải sản phẩm. Vui lòng thử lại sau.</p>';
+    }
+}
+
 // ================= AUTH SYSTEM =================
 
 // Initialize auth system
@@ -267,4 +346,12 @@ document.addEventListener('click', function(event) {
 });
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', initAuth);
+document.addEventListener('DOMContentLoaded', () => {
+    initAuth();
+    loadHomepageProducts();
+    loadCategoryProducts();
+    // Keep an already open homepage in sync with changes made in the admin area.
+    if (document.getElementById('productGallery')) {
+        window.setInterval(loadHomepageProducts, 30000);
+    }
+});
