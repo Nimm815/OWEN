@@ -72,7 +72,7 @@ async function loadHomepageProducts() {
         }
 
         gallery.innerHTML = products.map(product => `
-            <article class="card product-card">
+            <article class="card product-card" data-product-id="${product.id}" tabindex="0" role="button">
                 <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
                 <div class="product-card-content">
                     <p class="product-category">${escapeHtml(product.categoryName || product.brandName || 'OWEN')}</p>
@@ -106,7 +106,7 @@ async function loadCategoryProducts() {
         grid.classList.remove('lookbook');
         grid.classList.add('product-grid');
         grid.innerHTML = products.map(product => `
-            <article class="product-card">
+            <article class="product-card" data-product-id="${product.id}" tabindex="0" role="button">
                 <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
                 <h3>${escapeHtml(product.title)}</h3>
                 <p>${formatPrice(product.price)}</p>
@@ -116,6 +116,120 @@ async function loadCategoryProducts() {
         grid.innerHTML = '<p class="products-message">Không thể tải sản phẩm. Vui lòng thử lại sau.</p>';
     }
 }
+
+function ensurePurchaseModal() {
+    if (document.getElementById('purchaseModal')) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="purchaseModal" class="purchase-modal" aria-hidden="true">
+        <div class="purchase-dialog" role="dialog" aria-modal="true" aria-labelledby="purchaseTitle">
+          <button class="purchase-close" type="button" aria-label="Đóng">&times;</button>
+          <div id="purchaseContent"></div>
+        </div>
+      </div>`);
+    const modal = document.getElementById('purchaseModal');
+    modal.querySelector('.purchase-close').onclick = closePurchaseModal;
+    modal.onclick = event => { if (event.target === modal) closePurchaseModal(); };
+}
+
+function closePurchaseModal() {
+    const modal = document.getElementById('purchaseModal');
+    if (!modal) return;
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+}
+
+async function openPurchaseModal(productId) {
+    ensurePurchaseModal();
+    const modal = document.getElementById('purchaseModal');
+    const content = document.getElementById('purchaseContent');
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    content.innerHTML = '<p class="products-message">Đang tải sản phẩm...</p>';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/products/${productId}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể tải sản phẩm.');
+        const product = data.product;
+        const colors = [...new Map(product.variants.map(v => [String(v.colorId), v])).values()];
+        content.innerHTML = `
+          <div class="purchase-layout">
+            <img class="purchase-image" src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}">
+            <form id="purchaseForm" class="purchase-form">
+              <p class="product-category">${escapeHtml(product.categoryName || product.brandName)}</p>
+              <h2 id="purchaseTitle">${escapeHtml(product.title)}</h2>
+              <p class="purchase-description">${escapeHtml(product.description || '')}</p>
+              ${product.variants.length ? `
+                <label>Màu sắc<select id="purchaseColor" required>${colors.map(v => `<option value="${v.colorId}">${escapeHtml(v.colorName)}</option>`).join('')}</select></label>
+                <label>Kích thước<select id="purchaseSize" required></select></label>
+                <label>Họ tên người nhận<input name="recipientName" required autocomplete="name"></label>
+                <label>Số điện thoại<input name="recipientPhone" required autocomplete="tel"></label>
+                <label>Địa chỉ nhận hàng<textarea name="recipientAddress" required autocomplete="street-address"></textarea></label>
+                <label>Thanh toán<select name="paymentMethod"><option value="COD">Thanh toán khi nhận hàng</option><option value="VNPAY">VNPay</option></select></label>
+                <label>Ghi chú<textarea name="note"></textarea></label>
+                <p class="purchase-stock" id="purchaseStock"></p>
+                <div class="purchase-price" id="purchasePrice"></div>
+                <button class="purchase-button" type="submit">MUA HÀNG</button>` :
+                `<div class="purchase-price">${formatPrice(product.price)}</div><p class="purchase-stock">Sản phẩm hiện chưa có màu và size khả dụng.</p><button class="purchase-button" type="button" disabled>HẾT HÀNG</button>`}
+            </form>
+          </div>`;
+        if (!product.variants.length) return;
+        const color = content.querySelector('#purchaseColor');
+        const size = content.querySelector('#purchaseSize');
+        const updateSizes = () => {
+            const available = product.variants.filter(v => String(v.colorId) === color.value);
+            size.innerHTML = available.map(v => `<option value="${v.id}">${escapeHtml(v.size)}</option>`).join('');
+            updateVariant();
+        };
+        const updateVariant = () => {
+            const variant = product.variants.find(v => String(v.id) === size.value);
+            content.querySelector('#purchasePrice').textContent = formatPrice(variant?.price || product.price);
+            content.querySelector('#purchaseStock').textContent = variant ? `Còn ${variant.stockQty} sản phẩm` : '';
+        };
+        color.onchange = updateSizes;
+        size.onchange = updateVariant;
+        updateSizes();
+        const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+        if (currentUser?.name && !currentUser.guest) content.querySelector('[name="recipientName"]').value = currentUser.name;
+        content.querySelector('#purchaseForm').onsubmit = async event => {
+            event.preventDefault();
+            const variant = product.variants.find(v => String(v.id) === size.value);
+            const form = event.currentTarget;
+            const button = form.querySelector('.purchase-button');
+            const fields = Object.fromEntries(new FormData(form));
+            button.disabled = true;
+            button.textContent = 'ĐANG TẠO ĐƠN...';
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/orders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('authToken') ? { Authorization: `Bearer ${localStorage.getItem('authToken')}` } : {}) },
+                    body: JSON.stringify({ ...fields, productVariantId: variant.id, quantity: 1 })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Không thể đặt hàng.');
+                window.alert(`Đặt hàng thành công!\nMã đơn: ${result.orderCode}\nĐơn hàng đang chờ cửa hàng xác nhận.`);
+                closePurchaseModal();
+            } catch (error) {
+                window.alert(error.message);
+                button.disabled = false;
+                button.textContent = 'MUA HÀNG';
+            }
+        };
+    } catch (error) {
+        content.innerHTML = `<p class="products-message">${escapeHtml(error.message)}</p>`;
+    }
+}
+
+document.addEventListener('click', event => {
+    const card = event.target.closest('.product-card[data-product-id]');
+    if (card) openPurchaseModal(card.dataset.productId);
+});
+document.addEventListener('keydown', event => {
+    const card = event.target.closest('.product-card[data-product-id]');
+    if (card && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openPurchaseModal(card.dataset.productId); }
+    if (event.key === 'Escape') closePurchaseModal();
+});
 
 // ================= AUTH SYSTEM =================
 

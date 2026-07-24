@@ -223,6 +223,93 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const [products] = await pool.execute(
+      `SELECT p.Id AS id, p.SKU AS sku, p.Title AS title, p.Description AS description,
+              p.Price AS price, p.ImageUrl AS imageUrl, b.Name AS brandName,
+              c.Name AS categoryName
+       FROM Products p
+       INNER JOIN Brands b ON b.Id = p.BrandId
+       LEFT JOIN Categories c ON c.Id = p.CategoryId
+       WHERE p.Id = ? AND p.IsActive = 1`,
+      [req.params.id]
+    );
+    if (!products.length) return res.status(404).json({ message: 'Sản phẩm không tồn tại.' });
+    const [variants] = await pool.execute(
+      `SELECT v.Id AS id, v.ColorId AS colorId, c.Name AS colorName, c.Code AS colorCode,
+              v.SizeId AS sizeId, s.Value AS size, v.StockQty AS stockQty,
+              COALESCE(v.Price, p.Price) AS price
+       FROM ProductVariants v
+       INNER JOIN Products p ON p.Id = v.ProductId
+       INNER JOIN Colors c ON c.Id = v.ColorId
+       INNER JOIN Sizes s ON s.Id = v.SizeId
+       WHERE v.ProductId = ? AND v.StockQty > 0
+       ORDER BY c.Name, s.Value`,
+      [req.params.id]
+    );
+    return res.json({ product: { ...products[0], variants } });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải chi tiết sản phẩm.' });
+  }
+});
+
+app.post('/api/orders', async (req, res) => {
+  const { productVariantId, quantity = 1, recipientName, recipientPhone, recipientAddress, paymentMethod = 'COD', note } = req.body;
+  const orderQuantity = Number(quantity);
+  if (!productVariantId || !Number.isInteger(orderQuantity) || orderQuantity < 1 || !recipientName?.trim() || !recipientPhone?.trim() || !recipientAddress?.trim() || !['COD', 'VNPAY'].includes(paymentMethod)) {
+    return res.status(400).json({ message: 'Vui lòng nhập đầy đủ thông tin nhận hàng.' });
+  }
+  let userId = null;
+  const token = req.headers.authorization?.split(' ')[1];
+  if (token) {
+    try { userId = jwt.verify(token, jwtSecret).id; } catch (_) { return res.status(401).json({ message: 'Phiên đăng nhập đã hết hạn.' }); }
+  }
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [variants] = await connection.execute(
+      `SELECT v.Id AS id, v.StockQty AS stockQty, COALESCE(v.Price, p.Price) AS unitPrice
+       FROM ProductVariants v INNER JOIN Products p ON p.Id = v.ProductId
+       WHERE v.Id = ? AND p.IsActive = 1 FOR UPDATE`,
+      [productVariantId]
+    );
+    if (!variants.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Biến thể sản phẩm không còn tồn tại.' });
+    }
+    const variant = variants[0];
+    if (variant.stockQty < orderQuantity) {
+      await connection.rollback();
+      return res.status(409).json({ message: `Chỉ còn ${variant.stockQty} sản phẩm trong kho.` });
+    }
+    const unitPrice = Number(variant.unitPrice);
+    const totalAmount = unitPrice * orderQuantity;
+    const orderCode = `OWEN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const [orderResult] = await connection.execute(
+      `INSERT INTO Orders (OrderCode, UserId, RecipientName, RecipientPhone, RecipientAddress,
+                           PaymentMethod, Status, TotalAmount, Note)
+       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+      [orderCode, userId, recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), paymentMethod, totalAmount, note?.trim() || null]
+    );
+    await connection.execute(
+      'INSERT INTO OrderItems (OrderId, ProductVariantId, Quantity, UnitPrice, TotalPrice) VALUES (?, ?, ?, ?, ?)',
+      [orderResult.insertId, productVariantId, orderQuantity, unitPrice, totalAmount]
+    );
+    await connection.execute('UPDATE ProductVariants SET StockQty = StockQty - ? WHERE Id = ?', [orderQuantity, productVariantId]);
+    await connection.commit();
+    return res.status(201).json({ id: orderResult.insertId, orderCode, status: 'PENDING', totalAmount });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tạo đơn hàng.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Admin product management
 app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -295,11 +382,132 @@ app.delete('/api/admin/products/:id', authenticateToken, isAdmin, async (req, re
 app.get('/api/admin/catalog', authenticateToken, isAdmin, async (req, res) => {
   try {
     const [brands] = await pool.execute('SELECT Id as id, Name as name FROM Brands ORDER BY Name');
-    const [categories] = await pool.execute("SELECT Id as id, Name as name FROM Categories WHERE Name IN ('Men', 'Women', 'Collection') ORDER BY FIELD(Name, 'Men', 'Women', 'Collection')");
-    return res.json({ brands, categories });
+    const [categories] = await pool.execute('SELECT Id as id, Name as name FROM Categories ORDER BY Name');
+    const [colors] = await pool.execute('SELECT Id as id, Code as code, Name as name FROM Colors ORDER BY Name');
+    const [sizes] = await pool.execute('SELECT Id as id, Value as value FROM Sizes ORDER BY Value');
+    return res.json({ brands, categories, colors, sizes });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Unable to load product catalog.' });
+  }
+});
+
+const adminCatalogResources = {
+  categories: { table: 'Categories', fields: ['Name'], labels: ['name'] },
+  colors: { table: 'Colors', fields: ['Code', 'Name'], labels: ['code', 'name'] },
+  sizes: { table: 'Sizes', fields: ['Value'], labels: ['value'] }
+};
+
+app.get('/api/admin/:resource(categories|colors|sizes)', authenticateToken, isAdmin, async (req, res) => {
+  const resource = adminCatalogResources[req.params.resource];
+  try {
+    const columns = resource.fields.map((field, index) => `${field} AS ${resource.labels[index]}`).join(', ');
+    const [rows] = await pool.execute(`SELECT Id AS id, ${columns}, CreatedAt AS createdAt FROM ${resource.table} ORDER BY Id DESC`);
+    return res.json({ [req.params.resource]: rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải dữ liệu.' });
+  }
+});
+
+app.post('/api/admin/:resource(categories|colors|sizes)', authenticateToken, isAdmin, async (req, res) => {
+  const resource = adminCatalogResources[req.params.resource];
+  const values = resource.labels.map(label => String(req.body[label] || '').trim());
+  if (values.some(value => !value)) return res.status(400).json({ message: 'Vui lòng nhập đầy đủ thông tin.' });
+  try {
+    const placeholders = resource.fields.map(() => '?').join(', ');
+    const [result] = await pool.execute(`INSERT INTO ${resource.table} (${resource.fields.join(', ')}) VALUES (${placeholders})`, values);
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Dữ liệu này đã tồn tại.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể thêm dữ liệu.' });
+  }
+});
+
+app.put('/api/admin/:resource(categories|colors|sizes)/:id', authenticateToken, isAdmin, async (req, res) => {
+  const resource = adminCatalogResources[req.params.resource];
+  const values = resource.labels.map(label => String(req.body[label] || '').trim());
+  if (values.some(value => !value)) return res.status(400).json({ message: 'Vui lòng nhập đầy đủ thông tin.' });
+  try {
+    const assignments = resource.fields.map(field => `${field} = ?`).join(', ');
+    const [result] = await pool.execute(`UPDATE ${resource.table} SET ${assignments} WHERE Id = ?`, [...values, req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Không tìm thấy dữ liệu.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Dữ liệu này đã tồn tại.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể cập nhật dữ liệu.' });
+  }
+});
+
+app.delete('/api/admin/:resource(categories|colors|sizes)/:id', authenticateToken, isAdmin, async (req, res) => {
+  const resource = adminCatalogResources[req.params.resource];
+  try {
+    const [result] = await pool.execute(`DELETE FROM ${resource.table} WHERE Id = ?`, [req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Không tìm thấy dữ liệu.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    if (err.code === 'ER_ROW_IS_REFERENCED_2') return res.status(409).json({ message: 'Không thể xóa vì dữ liệu đang được sản phẩm sử dụng.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể xóa dữ liệu.' });
+  }
+});
+
+app.get('/api/admin/variants', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT v.Id AS id, v.ProductId AS productId, p.Title AS productName,
+              v.ColorId AS colorId, c.Name AS colorName, v.SizeId AS sizeId,
+              s.Value AS size, v.StockQty AS stockQty, v.Price AS price
+       FROM ProductVariants v
+       INNER JOIN Products p ON p.Id = v.ProductId
+       INNER JOIN Colors c ON c.Id = v.ColorId
+       INNER JOIN Sizes s ON s.Id = v.SizeId
+       ORDER BY v.Id DESC`
+    );
+    return res.json({ variants: rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải biến thể sản phẩm.' });
+  }
+});
+
+app.post('/api/admin/variants', authenticateToken, isAdmin, async (req, res) => {
+  const { productId, colorId, sizeId, stockQty, price } = req.body;
+  if (!productId || !colorId || !sizeId || !isPositiveNumber(stockQty) || (price !== '' && price != null && !isPositiveNumber(price))) return res.status(400).json({ message: 'Thông tin biến thể không hợp lệ.' });
+  try {
+    const [result] = await pool.execute('INSERT INTO ProductVariants (ProductId, ColorId, SizeId, StockQty, Price) VALUES (?, ?, ?, ?, ?)', [productId, colorId, sizeId, Number(stockQty), price === '' || price == null ? null : Number(price)]);
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Biến thể màu và size này đã tồn tại.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể thêm biến thể.' });
+  }
+});
+
+app.put('/api/admin/variants/:id', authenticateToken, isAdmin, async (req, res) => {
+  const { productId, colorId, sizeId, stockQty, price } = req.body;
+  if (!productId || !colorId || !sizeId || !isPositiveNumber(stockQty) || (price !== '' && price != null && !isPositiveNumber(price))) return res.status(400).json({ message: 'Thông tin biến thể không hợp lệ.' });
+  try {
+    const [result] = await pool.execute('UPDATE ProductVariants SET ProductId=?, ColorId=?, SizeId=?, StockQty=?, Price=? WHERE Id=?', [productId, colorId, sizeId, Number(stockQty), price === '' || price == null ? null : Number(price), req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Không tìm thấy biến thể.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Biến thể màu và size này đã tồn tại.' });
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể cập nhật biến thể.' });
+  }
+});
+
+app.delete('/api/admin/variants/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.execute('DELETE FROM ProductVariants WHERE Id = ?', [req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Không tìm thấy biến thể.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    if (err.code === 'ER_ROW_IS_REFERENCED_2') return res.status(409).json({ message: 'Biến thể đã có trong giỏ hàng hoặc đơn hàng nên không thể xóa.' });
+    return res.status(500).json({ message: 'Không thể xóa biến thể.' });
   }
 });
 
@@ -386,41 +594,53 @@ app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
-  const { orderCode, recipientName, recipientPhone, recipientAddress, paymentMethod, status, totalAmount, note } = req.body;
-  if (!orderCode || !recipientName || !recipientPhone || !recipientAddress || !['COD', 'VNPAY'].includes(paymentMethod) || !isValidOrderStatus(status) || !isPositiveNumber(totalAmount)) return res.status(400).json({ message: 'Please provide all required order details.' });
-  try {
-    const [result] = await pool.execute('INSERT INTO Orders (OrderCode, RecipientName, RecipientPhone, RecipientAddress, PaymentMethod, Status, TotalAmount, Note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [orderCode.trim(), recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), paymentMethod, status, Number(totalAmount), note || null]);
-    return res.status(201).json({ id: result.insertId });
-  } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Order code already exists.' });
-    console.error(err);
-    return res.status(500).json({ message: 'Unable to create order.' });
-  }
-});
-
 app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) => {
-  const { recipientName, recipientPhone, recipientAddress, paymentMethod, status, totalAmount, note } = req.body;
-  if (!recipientName || !recipientPhone || !recipientAddress || !['COD', 'VNPAY'].includes(paymentMethod) || !isValidOrderStatus(status) || !isPositiveNumber(totalAmount)) return res.status(400).json({ message: 'Please provide all required order details.' });
+  const { status } = req.body;
+  if (!isValidOrderStatus(status)) return res.status(400).json({ message: 'Trạng thái đơn hàng không hợp lệ.' });
+  let connection;
   try {
-    const [result] = await pool.execute('UPDATE Orders SET RecipientName = ?, RecipientPhone = ?, RecipientAddress = ?, PaymentMethod = ?, Status = ?, TotalAmount = ?, Note = ? WHERE Id = ?', [recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), paymentMethod, status, Number(totalAmount), note || null, req.params.id]);
-    if (!result.affectedRows) return res.status(404).json({ message: 'Order not found.' });
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [orders] = await connection.execute('SELECT Status AS status FROM Orders WHERE Id = ? FOR UPDATE', [req.params.id]);
+    if (!orders.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Không tìm thấy đơn hàng.' });
+    }
+    const currentStatus = orders[0].status;
+    const allowedTransitions = {
+      UNPAID: ['PENDING', 'CANCELLED'],
+      PENDING: ['SHIPPING', 'CANCELLED'],
+      SHIPPING: ['DELIVERED', 'CANCELLED'],
+      DELIVERED: [],
+      CANCELLED: []
+    };
+    if (status !== currentStatus && !allowedTransitions[currentStatus].includes(status)) {
+      await connection.rollback();
+      return res.status(409).json({ message: 'Không thể chuyển sang trạng thái này.' });
+    }
+    if (status === 'CANCELLED' && currentStatus !== 'CANCELLED') {
+      await connection.execute(
+        `UPDATE ProductVariants v
+         INNER JOIN OrderItems oi ON oi.ProductVariantId = v.Id
+         SET v.StockQty = v.StockQty + oi.Quantity
+         WHERE oi.OrderId = ?`,
+        [req.params.id]
+      );
+    }
+    const [result] = await connection.execute('UPDATE Orders SET Status = ? WHERE Id = ?', [status, req.params.id]);
+    await connection.commit();
     return res.json({ affectedRows: result.affectedRows });
   } catch (err) {
+    if (connection) await connection.rollback();
     console.error(err);
-    return res.status(500).json({ message: 'Unable to update order.' });
+    return res.status(500).json({ message: 'Không thể cập nhật đơn hàng.' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 app.delete('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) => {
-  try {
-    const [result] = await pool.execute('DELETE FROM Orders WHERE Id = ?', [req.params.id]);
-    if (!result.affectedRows) return res.status(404).json({ message: 'Order not found.' });
-    return res.json({ affectedRows: result.affectedRows });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: 'Unable to delete order.' });
-  }
+  return res.status(405).json({ message: 'Đơn hàng là lịch sử giao dịch và không thể xóa. Hãy hủy đơn nếu cần.' });
 });
 
 // Admin stats (basic)

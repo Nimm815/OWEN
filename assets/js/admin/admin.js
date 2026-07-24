@@ -5,7 +5,7 @@ const API_BASE_URL = ['localhost', '127.0.0.1'].includes(window.location.hostnam
 const pageTitle = document.getElementById('pageTitle');
 const pageArea = document.getElementById('pageArea');
 const sidebar = document.getElementById('sidebar');
-let catalog = { brands: [], categories: [] };
+let catalog = { brands: [], categories: [], colors: [], sizes: [] };
 
 function getAuthHeader() {
   const token = localStorage.getItem('authToken') || localStorage.getItem('auth_token');
@@ -71,6 +71,8 @@ async function loadPage(page) {
       document.getElementById('totalUsers').textContent = stats.totalUsers;
       pageArea.innerHTML = '<p>Use the menu to manage products, orders and users.</p>';
     } else if (page === 'products') renderProducts((await request('/api/admin/products')).products || []);
+    else if (['colors', 'sizes', 'categories'].includes(page)) renderCatalogPage(page, (await request(`/api/admin/${page}`))[page] || []);
+    else if (page === 'variants') renderVariants((await request('/api/admin/variants')).variants || []);
     else if (page === 'orders') renderOrders((await request('/api/admin/orders')).orders || []);
     else if (page === 'users') renderUsers((await request('/api/admin/users')).users || []);
     else pageArea.innerHTML = '<p>This page is not available yet.</p>';
@@ -78,6 +80,54 @@ async function loadPage(page) {
     if (/401|403/.test(error.message)) return renderLogin('Please log in with an admin account.');
     pageArea.innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function renderCatalogPage(resource, rows) {
+  const config = {
+    colors: { title: 'Màu sắc', singular: 'màu', columns: [['code', 'Mã màu'], ['name', 'Tên màu']] },
+    sizes: { title: 'Kích thước', singular: 'size', columns: [['value', 'Kích thước']] },
+    categories: { title: 'Kiểu loại', singular: 'kiểu loại', columns: [['name', 'Tên kiểu loại']] }
+  }[resource];
+  renderToolbar(config.title, `Thêm ${config.singular}`);
+  const mount = document.getElementById('tableMount');
+  mount.innerHTML = rows.length ? `<div class="table-responsive"><table><thead><tr>${config.columns.map(([, label]) => `<th>${label}</th>`).join('')}<th></th></tr></thead><tbody>${rows.map(row => `<tr>${config.columns.map(([key]) => `<td>${escapeHtml(row[key])}</td>`).join('')}<td class="row-actions">${actionButton('Sửa', '', 'edit', row.id)}${actionButton('Xóa', 'btn-danger', 'delete', row.id)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="no-data">Chưa có ${config.singular}.</div>`;
+  const openForm = (row = {}) => showForm(row.id ? `Sửa ${config.singular}` : `Thêm ${config.singular}`, config.columns.map(([name, label]) => ({ name, label, value: row[name], required: true })), async data => {
+    await request(`/api/admin/${resource}${row.id ? `/${row.id}` : ''}`, { method: row.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    catalog = { brands: [], categories: [], colors: [], sizes: [] };
+    loadPage(resource);
+  });
+  document.getElementById('createBtn').onclick = () => openForm();
+  mount.onclick = event => {
+    const button = event.target.closest('[data-action]'); if (!button) return;
+    const row = rows.find(item => item.id === Number(button.dataset.id));
+    if (button.dataset.action === 'edit') openForm(row);
+    else deleteRecord(config.singular, row.id, row[config.columns[0][0]], `/api/admin/${resource}`, resource);
+  };
+}
+
+async function renderVariants(variants) {
+  renderToolbar('Biến thể sản phẩm', 'Thêm biến thể');
+  const mount = document.getElementById('tableMount');
+  mount.innerHTML = variants.length ? `<div class="table-responsive"><table><thead><tr><th>Sản phẩm</th><th>Màu</th><th>Size</th><th>Tồn kho</th><th>Giá riêng</th><th></th></tr></thead><tbody>${variants.map(v => `<tr><td>${escapeHtml(v.productName)}</td><td>${escapeHtml(v.colorName)}</td><td>${escapeHtml(v.size)}</td><td>${v.stockQty}</td><td>${v.price == null ? 'Theo giá sản phẩm' : `${Number(v.price).toLocaleString('vi-VN')} đ`}</td><td class="row-actions">${actionButton('Sửa', '', 'edit', v.id)}${actionButton('Xóa', 'btn-danger', 'delete', v.id)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Chưa có biến thể.</div>';
+  if (!catalog.brands.length) catalog = await request('/api/admin/catalog');
+  const products = (await request('/api/admin/products')).products || [];
+  const openForm = (variant = {}) => showForm(variant.id ? 'Sửa biến thể' : 'Thêm biến thể', [
+    { name: 'productId', label: 'Sản phẩm', type: 'select', value: variant.productId || products[0]?.id, required: true, options: products.map(x => ({ value: x.id, label: x.title })) },
+    { name: 'colorId', label: 'Màu', type: 'select', value: variant.colorId || catalog.colors[0]?.id, required: true, options: catalog.colors.map(x => ({ value: x.id, label: x.name })) },
+    { name: 'sizeId', label: 'Size', type: 'select', value: variant.sizeId || catalog.sizes[0]?.id, required: true, options: catalog.sizes.map(x => ({ value: x.id, label: x.value })) },
+    { name: 'stockQty', label: 'Số lượng tồn', type: 'number', value: variant.stockQty ?? 0, required: true },
+    { name: 'price', label: 'Giá riêng (để trống dùng giá sản phẩm)', type: 'number', value: variant.price }
+  ], async data => {
+    await request(`/api/admin/variants${variant.id ? `/${variant.id}` : ''}`, { method: variant.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    loadPage('variants');
+  });
+  document.getElementById('createBtn').onclick = () => openForm();
+  mount.onclick = event => {
+    const button = event.target.closest('[data-action]'); if (!button) return;
+    const variant = variants.find(item => item.id === Number(button.dataset.id));
+    if (button.dataset.action === 'edit') openForm(variant);
+    else deleteRecord('biến thể', variant.id, `${variant.productName} - ${variant.colorName}/${variant.size}`, '/api/admin/variants', 'variants');
+  };
 }
 
 async function renderProducts(products) {
@@ -121,21 +171,28 @@ function userForm(user = {}) {
 }
 
 function renderOrders(orders) {
-  renderToolbar('Orders', 'Add order');
+  pageArea.innerHTML = '<div class="page-toolbar"><h2>Đơn hàng khách đặt</h2></div><div id="tableMount"></div>';
   const mount = document.getElementById('tableMount');
-  mount.innerHTML = orders.length ? `<div class="table-responsive"><table><thead><tr><th>Code</th><th>Customer</th><th>Status</th><th>Payment</th><th>Total</th><th>Created</th><th></th></tr></thead><tbody>${orders.map(o => `<tr><td>${escapeHtml(o.orderCode)}</td><td>${escapeHtml(o.recipientName || o.customerName)}</td><td>${escapeHtml(o.status)}</td><td>${escapeHtml(o.paymentMethod)}</td><td>${Number(o.totalAmount).toLocaleString('vi-VN')} đ</td><td>${formatDate(o.createdAt)}</td><td class="row-actions">${actionButton('Edit', '', 'edit', o.id)}${actionButton('Delete', 'btn-danger', 'delete', o.id)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">No orders yet.</div>';
-  document.getElementById('createBtn').onclick = () => orderForm();
-  mount.onclick = event => { const button = event.target.closest('[data-action]'); if (!button) return; const order = orders.find(item => item.id === Number(button.dataset.id)); if (button.dataset.action === 'edit') orderForm(order); else deleteRecord('order', order.id, order.orderCode, '/api/admin/orders', 'orders'); };
-}
-
-function orderForm(order = {}) {
-  showForm(order.id ? 'Edit order' : 'Add order', [
-    { name: 'orderCode', label: 'Order code', value: order.orderCode, required: true }, { name: 'recipientName', label: 'Recipient name', value: order.recipientName || order.customerName, required: true },
-    { name: 'recipientPhone', label: 'Phone', value: order.recipientPhone, required: true }, { name: 'totalAmount', label: 'Total amount', type: 'number', value: order.totalAmount, required: true },
-    { name: 'paymentMethod', label: 'Payment', type: 'select', value: order.paymentMethod || 'COD', options: [{ value: 'COD', label: 'COD' }, { value: 'VNPAY', label: 'VNPAY' }] },
-    { name: 'status', label: 'Status', type: 'select', value: order.status || 'PENDING', options: ['UNPAID', 'PENDING', 'SHIPPING', 'DELIVERED', 'CANCELLED'].map(x => ({ value: x, label: x })) },
-    { name: 'recipientAddress', label: 'Address', type: 'textarea', value: order.recipientAddress, required: true }, { name: 'note', label: 'Note', type: 'textarea', value: order.note }
-  ], async data => { if (order.id) delete data.orderCode; await request(`/api/admin/orders${order.id ? `/${order.id}` : ''}`, { method: order.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); loadPage('orders'); });
+  const statusLabels = { UNPAID: 'Chưa thanh toán', PENDING: 'Chờ xác nhận', SHIPPING: 'Đang giao hàng', DELIVERED: 'Đã hoàn thành', CANCELLED: 'Đã hủy' };
+  const buttons = order => {
+    if (order.status === 'PENDING' || order.status === 'UNPAID') return `${actionButton('Xác nhận', 'btn-primary', 'confirm', order.id)}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}`;
+    if (order.status === 'SHIPPING') return `${actionButton('Hoàn thành', 'btn-primary', 'complete', order.id)}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}`;
+    return '';
+  };
+  mount.innerHTML = orders.length ? `<div class="table-responsive"><table><thead><tr><th>Mã đơn</th><th>Người nhận</th><th>Điện thoại</th><th>Địa chỉ</th><th>Trạng thái</th><th>Thanh toán</th><th>Tổng tiền</th><th>Ngày đặt</th><th></th></tr></thead><tbody>${orders.map(o => `<tr><td>${escapeHtml(o.orderCode)}</td><td>${escapeHtml(o.recipientName || o.customerName)}</td><td>${escapeHtml(o.recipientPhone)}</td><td>${escapeHtml(o.recipientAddress)}</td><td><span class="order-status status-${o.status.toLowerCase()}">${statusLabels[o.status] || escapeHtml(o.status)}</span></td><td>${escapeHtml(o.paymentMethod)}</td><td>${Number(o.totalAmount).toLocaleString('vi-VN')} đ</td><td>${formatDate(o.createdAt)}</td><td class="row-actions">${buttons(o)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Chưa có đơn hàng nào.</div>';
+  mount.onclick = async event => {
+    const button = event.target.closest('[data-action]'); if (!button) return;
+    const order = orders.find(item => item.id === Number(button.dataset.id));
+    const nextStatus = button.dataset.action === 'confirm'
+      ? (order.status === 'UNPAID' ? 'PENDING' : 'SHIPPING')
+      : { complete: 'DELIVERED', cancel: 'CANCELLED' }[button.dataset.action];
+    if (!nextStatus) return;
+    if (button.dataset.action === 'cancel' && !window.confirm(`Hủy đơn ${order.orderCode}? Số lượng sản phẩm sẽ được hoàn lại kho.`)) return;
+    try {
+      await request(`/api/admin/orders/${order.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: nextStatus }) });
+      loadPage('orders');
+    } catch (error) { window.alert(error.message); }
+  };
 }
 
 async function deleteRecord(type, id, label, endpoint, page) {
