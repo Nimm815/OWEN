@@ -255,17 +255,13 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', authenticateToken, async (req, res) => {
   const { productVariantId, quantity = 1, recipientName, recipientPhone, recipientAddress, paymentMethod = 'COD', note } = req.body;
   const orderQuantity = Number(quantity);
   if (!productVariantId || !Number.isInteger(orderQuantity) || orderQuantity < 1 || !recipientName?.trim() || !recipientPhone?.trim() || !recipientAddress?.trim() || !['COD', 'VNPAY'].includes(paymentMethod)) {
     return res.status(400).json({ message: 'Vui lòng nhập đầy đủ thông tin nhận hàng.' });
   }
-  let userId = null;
-  const token = req.headers.authorization?.split(' ')[1];
-  if (token) {
-    try { userId = jwt.verify(token, jwtSecret).id; } catch (_) { return res.status(401).json({ message: 'Phiên đăng nhập đã hết hạn.' }); }
-  }
+  const userId = req.user.id;
   let connection;
   try {
     connection = await pool.getConnection();
@@ -313,7 +309,30 @@ app.post('/api/orders', async (req, res) => {
 // Admin product management
 app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const [rows] = await pool.execute(`SELECT p.Id as id, p.SKU as sku, p.Title as title, p.Description as description, p.Price as price, p.ImageUrl as imageUrl, p.BrandId as brandId, p.CategoryId as categoryId, p.IsActive as isActive, p.CreatedAt as createdAt, b.Name as brandName, c.Name as categoryName FROM Products p JOIN Brands b ON b.Id = p.BrandId LEFT JOIN Categories c ON c.Id = p.CategoryId ORDER BY p.Id DESC`);
+    const [rows] = await pool.execute(`
+      SELECT p.Id AS id,
+             p.SKU AS sku,
+             p.Title AS title,
+             p.Description AS description,
+             p.Price AS price,
+             p.ImageUrl AS imageUrl,
+             p.BrandId AS brandId,
+             p.CategoryId AS categoryId,
+             p.IsActive AS isActive,
+             p.CreatedAt AS createdAt,
+             b.Name AS brandName,
+             c.Name AS categoryName,
+             COALESCE(stock.TotalStock, 0) AS stockQty
+      FROM Products p
+      INNER JOIN Brands b ON b.Id = p.BrandId
+      LEFT JOIN Categories c ON c.Id = p.CategoryId
+      LEFT JOIN (
+        SELECT ProductId, SUM(StockQty) AS TotalStock
+        FROM ProductVariants
+        GROUP BY ProductId
+      ) stock ON stock.ProductId = p.Id
+      ORDER BY p.Id DESC
+    `);
     return res.json({ products: rows });
   } catch (err) {
     console.error(err);

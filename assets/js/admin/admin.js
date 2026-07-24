@@ -133,7 +133,7 @@ async function renderVariants(variants) {
 async function renderProducts(products) {
   renderToolbar('Products', 'Add product');
   const mount = document.getElementById('tableMount');
-  mount.innerHTML = products.length ? `<div class="table-responsive"><table><thead><tr><th>SKU</th><th>Product</th><th>Brand</th><th>Price</th><th>Active</th><th></th></tr></thead><tbody>${products.map(p => `<tr><td>${escapeHtml(p.sku)}</td><td>${escapeHtml(p.title)}</td><td>${escapeHtml(p.brandName)}</td><td>${Number(p.price).toLocaleString('vi-VN')} đ</td><td>${p.isActive ? 'Yes' : 'No'}</td><td class="row-actions">${actionButton('Edit', '', 'edit', p.id)}${actionButton('Delete', 'btn-danger', 'delete', p.id)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">No products yet.</div>';
+  mount.innerHTML = products.length ? `<div class="table-responsive"><table><thead><tr><th>SKU</th><th>Sản phẩm</th><th>Thương hiệu</th><th>Giá</th><th>Tồn kho</th><th>Hoạt động</th><th></th></tr></thead><tbody>${products.map(p => `<tr><td>${escapeHtml(p.sku)}</td><td>${escapeHtml(p.title)}</td><td>${escapeHtml(p.brandName)}</td><td>${Number(p.price).toLocaleString('vi-VN')} đ</td><td><span class="stock-quantity ${Number(p.stockQty) <= 0 ? 'out-of-stock' : Number(p.stockQty) <= 5 ? 'low-stock' : ''}">${Number(p.stockQty).toLocaleString('vi-VN')}</span></td><td>${p.isActive ? 'Có' : 'Không'}</td><td class="row-actions">${actionButton('Sửa', '', 'edit', p.id)}${actionButton('Xóa', 'btn-danger', 'delete', p.id)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Chưa có sản phẩm.</div>';
   if (!catalog.brands.length) catalog = await request('/api/admin/catalog');
   document.getElementById('createBtn').onclick = () => productForm();
   mount.onclick = event => {
@@ -208,5 +208,11 @@ function renderLogin(message = '') {
 
 document.querySelectorAll('.sidebar nav li').forEach(li => li.onclick = () => { document.querySelectorAll('.sidebar nav li').forEach(x => x.classList.remove('active')); li.classList.add('active'); loadPage(li.dataset.page); });
 document.getElementById('toggleSidebar').onclick = () => sidebar.classList.toggle('open');
-document.getElementById('logoutBtn').onclick = () => { localStorage.removeItem('authToken'); localStorage.removeItem('auth_token'); window.location.href = '/'; };
+document.getElementById('logoutBtn').onclick = () => {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('currentUser');
+  localStorage.removeItem('authInitialized');
+  window.location.href = '/';
+};
 loadPage('dashboard');

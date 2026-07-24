@@ -194,6 +194,18 @@ async function openPurchaseModal(productId) {
         if (currentUser?.name && !currentUser.guest) content.querySelector('[name="recipientName"]').value = currentUser.name;
         content.querySelector('#purchaseForm').onsubmit = async event => {
             event.preventDefault();
+            const authToken = localStorage.getItem('authToken');
+            const signedInUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+            if (!authToken || !signedInUser || signedInUser.guest) {
+                window.alert('Bạn cần đăng nhập tài khoản để mua hàng.');
+                closePurchaseModal();
+                if (signedInUser?.guest) {
+                    localStorage.removeItem('currentUser');
+                    updateAuthUI();
+                }
+                openAuthModal();
+                return;
+            }
             const variant = product.variants.find(v => String(v.id) === size.value);
             const form = event.currentTarget;
             const button = form.querySelector('.purchase-button');
@@ -203,10 +215,17 @@ async function openPurchaseModal(productId) {
             try {
                 const response = await fetch(`${API_BASE_URL}/api/orders`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('authToken') ? { Authorization: `Bearer ${localStorage.getItem('authToken')}` } : {}) },
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
                     body: JSON.stringify({ ...fields, productVariantId: variant.id, quantity: 1 })
                 });
                 const result = await response.json();
+                if (response.status === 401 || response.status === 403) {
+                    clearAuthData();
+                    updateAuthUI();
+                    closePurchaseModal();
+                    openAuthModal();
+                    throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+                }
                 if (!response.ok) throw new Error(result.message || 'Không thể đặt hàng.');
                 window.alert(`Đặt hàng thành công!\nMã đơn: ${result.orderCode}\nĐơn hàng đang chờ cửa hàng xác nhận.`);
                 closePurchaseModal();
@@ -315,6 +334,11 @@ async function handleLogin(event) {
         setAuthData(data.user, data.token);
         document.getElementById('loginEmail').value = '';
         document.getElementById('loginPassword').value = '';
+
+        if (['ADMIN', 'ROLE_ADMIN'].includes(data.user.role)) {
+            window.location.href = '/admin/';
+            return;
+        }
 
         closeAuthModal();
         updateAuthUI();
