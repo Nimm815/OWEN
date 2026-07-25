@@ -432,8 +432,7 @@ function handleGuestLogin() {
 function handleLogout() {
     if (confirm('Bạn có chắc chắn muốn đăng xuất?')) {
         clearAuthData();
-        updateAuthUI();
-        openAuthModal();
+        window.location.href = 'index.html';
     }
 }
 
@@ -469,6 +468,105 @@ function showError(errorDiv, message) {
     errorDiv.innerHTML = `<div class="error-message">${message}</div>`;
 }
 
+// ================= AI SHOPPING ASSISTANT =================
+
+const aiChatHistory = [];
+
+function addAiMessage(role, content) {
+    const messages = document.getElementById('aiChatMessages');
+    if (!messages) return;
+    const item = document.createElement('div');
+    item.className = `ai-chat-message ${role}`;
+    item.textContent = content;
+    messages.appendChild(item);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function initAiChat() {
+    const widget = document.createElement('section');
+    widget.className = 'ai-chat-widget';
+    widget.innerHTML = `
+        <button class="ai-chat-toggle" type="button" aria-label="Mở trợ lý AI" aria-expanded="false">AI</button>
+        <div class="ai-chat-panel" aria-hidden="true">
+            <div class="ai-chat-header">
+                <div>
+                    <strong>Trợ lý OWEN</strong>
+                    <span>Tư vấn sản phẩm bằng AI</span>
+                </div>
+                <button class="ai-chat-close" type="button" aria-label="Đóng trợ lý">&times;</button>
+            </div>
+            <div id="aiChatMessages" class="ai-chat-messages" aria-live="polite"></div>
+            <div class="ai-chat-suggestions">
+                <button type="button">Có sản phẩm nào dưới 500.000đ không?</button>
+                <button type="button">Gợi ý sản phẩm còn hàng</button>
+            </div>
+            <form class="ai-chat-form">
+                <input type="text" maxlength="500" placeholder="Nhập câu hỏi..." aria-label="Câu hỏi cho trợ lý AI" required>
+                <button type="submit">Gửi</button>
+            </form>
+        </div>`;
+    document.body.appendChild(widget);
+
+    const toggle = widget.querySelector('.ai-chat-toggle');
+    const panel = widget.querySelector('.ai-chat-panel');
+    const close = widget.querySelector('.ai-chat-close');
+    const form = widget.querySelector('.ai-chat-form');
+    const input = form.querySelector('input');
+    const submitButton = form.querySelector('button');
+
+    function setOpen(open) {
+        panel.classList.toggle('open', open);
+        panel.setAttribute('aria-hidden', String(!open));
+        toggle.setAttribute('aria-expanded', String(open));
+        if (open) input.focus();
+    }
+
+    async function sendQuestion(question) {
+        const cleanQuestion = question.trim();
+        if (!cleanQuestion || submitButton.disabled) return;
+        addAiMessage('user', cleanQuestion);
+        input.value = '';
+        input.disabled = true;
+        submitButton.disabled = true;
+        submitButton.textContent = '...';
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: cleanQuestion, history: aiChatHistory })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Không thể nhận câu trả lời.');
+            addAiMessage('assistant', data.answer);
+            aiChatHistory.push(
+                { role: 'user', content: cleanQuestion },
+                { role: 'assistant', content: data.answer }
+            );
+            if (aiChatHistory.length > 12) aiChatHistory.splice(0, aiChatHistory.length - 12);
+        } catch (error) {
+            addAiMessage('error', error.message);
+        } finally {
+            input.disabled = false;
+            submitButton.disabled = false;
+            submitButton.textContent = 'Gửi';
+            input.focus();
+        }
+    }
+
+    toggle.addEventListener('click', () => setOpen(!panel.classList.contains('open')));
+    close.addEventListener('click', () => setOpen(false));
+    form.addEventListener('submit', event => {
+        event.preventDefault();
+        sendQuestion(input.value);
+    });
+    widget.querySelectorAll('.ai-chat-suggestions button').forEach(button => {
+        button.addEventListener('click', () => sendQuestion(button.textContent));
+    });
+
+    addAiMessage('assistant', 'Xin chào! Tôi có thể giúp bạn tìm sản phẩm theo giá, thương hiệu hoặc nhu cầu.');
+}
+
 // Close modal when clicking outside
 document.addEventListener('click', function(event) {
     const authModal = document.getElementById('authModal');
@@ -486,6 +584,7 @@ document.addEventListener('click', function(event) {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     initAuth();
+    initAiChat();
     loadHomepageProducts();
     loadCategoryProducts();
     // Keep an already open homepage in sync with changes made in the admin area.

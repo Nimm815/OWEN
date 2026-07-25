@@ -131,7 +131,7 @@ async function renderVariants(variants) {
 }
 
 async function renderProducts(products) {
-  renderToolbar('Products', 'Add product');
+  renderToolbar('Sản Phẩm', 'Thêm Sản Phẩm');
   const mount = document.getElementById('tableMount');
   mount.innerHTML = products.length ? `<div class="table-responsive"><table><thead><tr><th>SKU</th><th>Sản phẩm</th><th>Thương hiệu</th><th>Giá</th><th>Tồn kho</th><th>Hoạt động</th><th></th></tr></thead><tbody>${products.map(p => `<tr><td>${escapeHtml(p.sku)}</td><td>${escapeHtml(p.title)}</td><td>${escapeHtml(p.brandName)}</td><td>${Number(p.price).toLocaleString('vi-VN')} đ</td><td><span class="stock-quantity ${Number(p.stockQty) <= 0 ? 'out-of-stock' : Number(p.stockQty) <= 5 ? 'low-stock' : ''}">${Number(p.stockQty).toLocaleString('vi-VN')}</span></td><td>${p.isActive ? 'Có' : 'Không'}</td><td class="row-actions">${actionButton('Sửa', '', 'edit', p.id)}${actionButton('Xóa', 'btn-danger', 'delete', p.id)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Chưa có sản phẩm.</div>';
   if (!catalog.brands.length) catalog = await request('/api/admin/catalog');
@@ -213,6 +213,7 @@ document.getElementById('logoutBtn').onclick = () => {
   localStorage.removeItem('auth_token');
   localStorage.removeItem('currentUser');
   localStorage.removeItem('authInitialized');
-  window.location.href = '/';
+  const isBackendServer = window.location.port === '3000';
+  window.location.href = isBackendServer ? '/' : '/HTML/index.html';
 };
 loadPage('dashboard');
