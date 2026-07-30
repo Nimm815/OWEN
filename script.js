@@ -104,6 +104,7 @@ async function loadCategoryProducts() {
     if (!grid) return;
 
     const category = grid.dataset.storeCategory;
+    const isShowcase = grid.dataset.displayMode === 'showcase';
     grid.innerHTML = '<p class="products-message">Đang tải sản phẩm...</p>';
     try {
         const response = await fetch(`${API_BASE_URL}/api/products?limit=48&category=${encodeURIComponent(category)}`);
@@ -116,14 +117,24 @@ async function loadCategoryProducts() {
             return;
         }
 
-        grid.classList.remove('lookbook');
-        grid.classList.add('product-grid');
-        grid.innerHTML = products.map(product => `
-            <article class="product-card" data-product-id="${product.id}" tabindex="0" role="button">
-                <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
-                <h3>${escapeHtml(product.title)}</h3>
-                <p>${formatPrice(product.price)}</p>
-            </article>`).join('');
+        if (isShowcase) {
+            grid.classList.remove('product-grid');
+            grid.classList.add('lookbook');
+            grid.innerHTML = products.map(product => `
+                <article class="look-item collection-product">
+                    <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
+                    <h2>${escapeHtml(product.title)}</h2>
+                </article>`).join('');
+        } else {
+            grid.classList.remove('lookbook');
+            grid.classList.add('product-grid');
+            grid.innerHTML = products.map(product => `
+                <article class="product-card" data-product-id="${product.id}" tabindex="0" role="button">
+                    <img src="${escapeHtml(productImageUrl(product.imageUrl))}" alt="${escapeHtml(product.title)}" loading="lazy">
+                    <h3>${escapeHtml(product.title)}</h3>
+                    <p>${formatPrice(product.price)}</p>
+                </article>`).join('');
+        }
     } catch (error) {
         console.error(error);
         grid.innerHTML = '<p class="products-message">Không thể tải sản phẩm. Vui lòng thử lại sau.</p>';
