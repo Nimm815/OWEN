@@ -1,40 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="vi">
 <head>
-
     <meta charset="UTF-8">
-
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Stories - OWEN</title>
-
+    <title>Một ngày, một dấu ấn - OWEN Stories</title>
     <link rel="stylesheet" href="../style.css">
-
 </head>
-
-
 <body>
-
-
 <header>
-
-    <div class="logo">
-        OWEN
-    </div>
-
-
+    <div class="logo">OWEN</div>
     <nav>
-
         <a href="index.html">Home</a>
         <a href="men.html">Men</a>
         <a href="women.html">Women</a>
         <a href="collection.html">Collection</a>
         <a href="stories.html">Stories</a>
         <a href="about.html">About</a>
-
     </nav>
-
     <div id="authSection" style="display:none; width: 150px;">
         <div class="user-profile">
             <button class="logout-btn" onclick="handleLogout()">LOGOUT</button>
@@ -44,205 +26,108 @@
             </div>
         </div>
     </div>
-
     <div id="authBtn" style="display:none; width: 100px;">
         <button class="auth-btn" onclick="openAuthModal()" style="width: 100%; margin: 0; padding: 8px 0; font-size: 12px;">LOGIN</button>
     </div>
-
-    <div class="menu-btn">
-
-        ☰
-
-    </div>
-
-
+    <div class="menu-btn">☰</div>
 </header>
 
-
-
-
-
 <section class="stories-cover">
-
-
-    <img src="https://images.unsplash.com/photo-1445205170230-053b83016050?w=2000">
-
-
+    <img src="https://images.unsplash.com/photo-1445205170230-053b83016050?w=2000" alt="Không gian thời trang OWEN">
     <div class="cover-text">
-
-        <h1>
-            STORIES
-        </h1>
-
-        <p>
-            MATERIALS / CRAFT / CULTURE
-        </p>
-
+        <h1>MỘT NGÀY, MỘT DẤU ẤN</h1>
+        <p>AN OWEN STORY — CHAPTER 01</p>
     </div>
-
-
 </section>
 
+<main class="story-journey">
+    <section class="story-prologue reveal">
+        <p class="story-kicker">OWEN ORIGINAL STORY / 2026</p>
+        <h2>Có những ngày bắt đầu bằng một lựa chọn rất nhỏ.</h2>
+        <p>
+            6 giờ 42 phút. Thành phố vừa thức giấc. Minh đứng trước tủ đồ,
+            không tìm kiếm sự nổi bật — chỉ muốn chọn một phiên bản đúng nhất của mình
+            cho ngày dài phía trước.
+        </p>
+        <span class="story-scroll">CUỘN ĐỂ ĐỌC TIẾP <i></i></span>
+    </section>
 
-
-
-
-
-
-<section class="stories-grid">
-
-
-
-    <article class="story-card reveal">
-
-
-        <img src="https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=1200">
-
-
-        <div class="story-content">
-
-
-            <p class="date">
-                2026.03.12
-            </p>
-
-
-            <h2>
-                The Art of Simple Garments
-            </h2>
-
-
-            <p>
-                Exploring timeless silhouettes and refined materials.
-            </p>
-
-
+    <section class="story-chapter reveal">
+        <div class="story-chapter-image">
+            <span>01 / 04</span>
+            <img src="../Images/Collection_1.jpg" alt="Trang phục trắng thanh lịch trong không gian ánh đèn ấm">
         </div>
-
-
-    </article>
-
-
-
-
-
-    <article class="story-card reveal">
-
-
-        <img src="https://images.unsplash.com/photo-1483985988355-763728e1935b?w=1200">
-
-
-        <div class="story-content">
-
-
-            <p class="date">
-                2026.02.25
-            </p>
-
-
-            <h2>
-                Behind The Collection
-            </h2>
-
-
+        <div class="story-chapter-copy">
+            <p class="story-time">19:30 — ĐÊM THÀNH PHỐ</p>
+            <h2>Vừa vặn với chính mình</h2>
             <p>
-                A journey through fabric, texture and craftsmanship.
+                Trong không gian ngập ánh đèn ấm, sắc trắng ôm gọn đường nét cơ thể
+                nổi bật bên chiếc áo khoác lông mềm mại. Đôi giày cao gót và chiếc túi
+                nhỏ đồng điệu hoàn thiện vẻ ngoài vừa nữ tính, vừa kiêu kỳ — một khoảnh
+                khắc tĩnh lặng nhưng vẫn đủ sức thu hút mọi ánh nhìn.
             </p>
-
-
         </div>
+    </section>
 
+    <blockquote class="story-quote reveal" style="font-size: 50px;">
+        “Trang phục đẹp nhất không nói thay bạn.<br>Nó giúp bạn cất lời.”
+    </blockquote>
 
-    </article>
-
-
-
-
-
-
-    <article class="story-card reveal">
-
-
-        <img src="https://images.unsplash.com/photo-1529139574466-a303027c1d8b?w=1200">
-
-
-        <div class="story-content">
-
-
-            <p class="date">
-                2026.01.18
-            </p>
-
-
-            <h2>
-                Modern Minimalism
-            </h2>
-
-
+    <section class="story-chapter story-chapter-reverse reveal">
+        <div class="story-chapter-image">
+            <span>02 / 04</span>
+            <img src="https://images.unsplash.com/photo-1483985988355-763728e1935b?w=1200" alt="Nhịp sống thời trang giữa thành phố">
+        </div>
+        <div class="story-chapter-copy">
+            <p class="story-time">10:30 — GIỮA NHỊP PHỐ</p>
+            <h2>Bình tĩnh giữa chuyển động</h2>
             <p>
-                Understanding the philosophy behind quiet luxury.
+                Cuộc họp nối tiếp cuộc hẹn. Ngoài cửa kính, thành phố không ngừng
+                thay đổi. Nhưng có những điều không cần chạy theo xu hướng: một phom
+                dáng chuẩn, một gam màu bền bỉ, một sự tự tin không cần phô bày.
             </p>
-
-
         </div>
+    </section>
 
-
-    </article>
-
-
-
-
-
-
-    <article class="story-card reveal">
-
-
-        <img src="https://images.unsplash.com/photo-1485968579580-b6d095142e6e?w=1200">
-
-
-        <div class="story-content">
-
-
-            <p class="date">
-                2025.12.05
-            </p>
-
-
-            <h2>
-                Natural Materials
-            </h2>
-
-
+    <section class="story-chapter reveal">
+        <div class="story-chapter-image">
+            <span>03 / 04</span>
+            <img src="https://images.unsplash.com/photo-1529139574466-a303027c1d8b?w=1200" alt="Phong cách tối giản trong buổi chiều">
+        </div>
+        <div class="story-chapter-copy">
+            <p class="story-time">17:48 — SAU GIỜ LÀM</p>
+            <h2>Một ngày, nhiều phiên bản</h2>
             <p>
-                Cotton, wool and linen in everyday clothing.
+                Nới một nút cổ tay, khoác thêm chiếc jacket. Từ bàn làm việc đến
+                cuộc gặp cuối ngày chỉ là vài bước chân. Trang phục vẫn vậy, nhưng
+                người mặc đã mang theo thêm những câu chuyện mới.
             </p>
-
-
         </div>
+    </section>
 
+    <section class="story-finale reveal">
+        <div class="story-finale-copy">
+            <p class="story-time">22:06 — TRỞ VỀ</p>
+            <h2>Ngày mai, câu chuyện lại tiếp tục.</h2>
+            <p>
+                OWEN không tạo nên con người bạn. Chúng tôi chỉ chăm chút từng
+                chất liệu, đường may và phom dáng để bạn tự tin sống câu chuyện
+                của riêng mình — theo cách giản dị, bản lĩnh và chân thành nhất.
+            </p>
+            <a href="collection.html">KHÁM PHÁ BỘ SƯU TẬP <span>→</span></a>
+        </div>
+        <div class="story-finale-mark" aria-hidden="true">
+            <span>04 / 04</span>
+            <strong>OWEN</strong>
+            <small>WEAR YOUR OWN STORY</small>
+        </div>
+    </section>
+</main>
 
-    </article>
+<footer><p>2026 - OWEN Việt Nam</p></footer>
 
-
-
-</section>
-
-
-
-
-
-<footer>
-
-<p>
-2026 - OWEN Viet Nam
-</p>
-
-</footer>
-
-<!-- AUTH MODAL -->
 <div id="authModal" class="auth-modal">
     <div class="auth-container">
-        <!-- LOGIN FORM -->
         <div id="loginForm">
             <h2>LOGIN</h2>
             <div id="loginError"></div>
@@ -257,13 +142,8 @@
                 </div>
                 <button type="submit" class="auth-btn">LOGIN</button>
             </form>
-            <div class="auth-toggle">
-                Chưa có tài khoản?
-                <button onclick="switchToRegister()">Đăng ký</button>
-            </div>
+            <div class="auth-toggle">Chưa có tài khoản? <button onclick="switchToRegister()">Đăng ký</button></div>
         </div>
-
-        <!-- REGISTER FORM -->
         <div id="registerForm" style="display:none;">
             <h2>REGISTER</h2>
             <div id="registerError"></div>
@@ -286,20 +166,13 @@
                 </div>
                 <button type="submit" class="auth-btn">REGISTER</button>
             </form>
-            <div class="auth-toggle">
-                Đã có tài khoản?
-                <button onclick="switchToLogin()">Đăng nhập</button>
-            </div>
+            <div class="auth-toggle">Đã có tài khoản? <button onclick="switchToLogin()">Đăng nhập</button></div>
         </div>
         <div style="text-align:center; margin-bottom:12px;">
             <button class="guest-btn" onclick="handleGuestLogin()">Tiếp tục với tư cách Khách</button>
         </div>
     </div>
 </div>
-
 <script src="../script.js"></script>
-
-
 </body>
-
 </html>

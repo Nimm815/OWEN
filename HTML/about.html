@@ -1,38 +1,22 @@
-
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="vi">
 <head>
-
     <meta charset="UTF-8">
-
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>About - OWEN</title>
-
+    <title>Về OWEN - Mặc điều bạn tin</title>
     <link rel="stylesheet" href="../style.css">
-
 </head>
-
 <body>
-
 <header>
-
-    <div class="logo">
-        OWEN
-    </div>
-
+    <div class="logo">OWEN</div>
     <nav>
-
         <a href="index.html">Home</a>
         <a href="men.html">Men</a>
         <a href="women.html">Women</a>
         <a href="collection.html">Collection</a>
         <a href="stories.html">Stories</a>
         <a href="about.html">About</a>
-
     </nav>
-
     <div id="authSection" style="display:none; width: 150px;">
         <div class="user-profile">
             <button class="logout-btn" onclick="handleLogout()">LOGOUT</button>
@@ -42,256 +26,175 @@
             </div>
         </div>
     </div>
-
     <div id="authBtn" style="display:none; width: 100px;">
-        <button class="auth-btn" onclick="openAuthModal()" style="width: 100%; margin: 0; padding: 8px 0; font-size: 12px;">LOGIN</button>
+        <button class="auth-btn" onclick="openAuthModal()" style="width:100%;margin:0;padding:8px 0;font-size:12px">LOGIN</button>
     </div>
-
-    <div class="menu-btn">
-        ☰
-    </div>
-
+    <div class="menu-btn">☰</div>
 </header>
 
-
-
-<section class="about-page">
-
-    <div class="about-container">
-
-        <h1>ABOUT OWEN</h1>
-
-        <p class="about-intro">
-
-            OWEN is a contemporary fashion brand dedicated to creating
-            timeless clothing that blends elegance, comfort and
-            functionality. Inspired by modern minimalism, we believe
-            that clothing should not only express personal style but
-            also become a natural part of everyday life.
-
-        </p>
-
-
-
-
-
-        <div class="about-block reveal">
-
-            <h2>Our Story</h2>
-
-            <p>
-
-                Since our establishment, OWEN has focused on delivering
-                garments with clean silhouettes, refined tailoring and
-                premium materials. We are inspired by simplicity and
-                believe that true luxury comes from quality,
-                craftsmanship and attention to detail rather than
-                excessive decoration.
-
+<main class="about-editorial">
+    <section class="about-hero">
+        <div class="about-hero-copy">
+            <p class="about-eyebrow">ABOUT OWEN / EST. IN VIETNAM</p>
+            <h1>Mặc điều<br>bạn <em>tin.</em></h1>
+            <p class="about-hero-intro">
+                Chúng tôi tin rằng phong cách thật sự không cần lên tiếng quá lớn.
+                Nó hiện diện trong cách bạn bước vào một căn phòng, bắt đầu một ngày
+                mới và tự tin là chính mình.
             </p>
+            <a href="#our-belief">KHÁM PHÁ CÂU CHUYỆN <span>↓</span></a>
+        </div>
+        <div class="about-hero-image">
+            <img src="../Images/Header_TrangChu.jpg" alt="Tinh thần thời trang hiện đại của OWEN">
+            <span>01 — THE BEGINNING</span>
+        </div>
+    </section>
 
+    <section class="about-belief reveal" id="our-belief">
+        <p class="about-section-no">01 / NIỀM TIN</p>
+        <div>
+            <h2>Không chỉ là thứ<br>bạn mặc lên người.</h2>
+            <p>
+                OWEN tạo nên những thiết kế đồng hành cùng đời sống thật — đủ chỉn
+                chu cho khoảnh khắc quan trọng, đủ thoải mái cho những ngày bận rộn
+                và đủ bền bỉ để trở thành một phần trong câu chuyện của bạn.
+            </p>
+        </div>
+    </section>
+
+    <section class="about-statement reveal">
+        <span>LESS NOISE</span>
+        <strong>MORE<br>MEANING</strong>
+        <p>Ít phô trương. Nhiều giá trị.</p>
+    </section>
+
+    <section class="about-craft reveal">
+        <div class="about-craft-image">
+            <img src="https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=1400" alt="Chi tiết đường may và chất liệu trang phục">
+        </div>
+        <div class="about-craft-copy">
+            <p class="about-section-no">02 / TỪNG CHI TIẾT</p>
+            <h2>Sự tinh tế bắt đầu từ những điều không dễ thấy.</h2>
+            <p>
+                Một đường vai được cân chỉnh. Một chất vải được lựa chọn vì cảm giác
+                trên da. Một chiếc cúc nằm đúng vị trí. Với OWEN, chất lượng không
+                phải lời hứa ở cuối hành trình — đó là điểm khởi đầu của mọi thiết kế.
+            </p>
+            <ul>
+                <li><span>01</span> Phom dáng có chủ đích</li>
+                <li><span>02</span> Chất liệu được tuyển chọn</li>
+                <li><span>03</span> Hoàn thiện bằng sự tỉ mỉ</li>
+            </ul>
+        </div>
+    </section>
+
+    <section class="about-values">
+        <div class="about-values-heading reveal">
+            <p class="about-section-no">03 / GIÁ TRỊ CỐT LÕI</p>
+            <h2>Ba điều<br>chúng tôi theo đuổi.</h2>
+        </div>
+        <div class="about-value reveal">
+            <span>01</span>
+            <h3>Giản dị</h3>
+            <p>Loại bỏ điều thừa để giữ lại những đường nét có ý nghĩa.</p>
+        </div>
+        <div class="about-value reveal">
+            <span>02</span>
+            <h3>Bản lĩnh</h3>
+            <p>Thiết kế để người mặc tự tin thể hiện bản thân theo cách riêng.</p>
+        </div>
+        <div class="about-value reveal">
+            <span>03</span>
+            <h3>Bền vững</h3>
+            <p>Tạo nên những món đồ đáng mặc lâu hơn một mùa xu hướng.</p>
+        </div>
+    </section>
+
+    <section class="about-closing reveal">
+        <p>OUR PROMISE</p>
+        <h2>Chúng tôi không mặc định<br>bạn nên trở thành ai.</h2>
+        <h3>OWEN ở đây để bạn tự quyết định điều đó.</h3>
+        <a href="collection.html">TÌM PHONG CÁCH CỦA BẠN <span>→</span></a>
+    </section>
+
+    <section class="about-contact">
+        <div class="about-contact-heading">
+            <p class="about-section-no">04 / LIÊN HỆ</p>
+            <h2>Hãy bắt đầu<br>một cuộc trò chuyện.</h2>
         </div>
 
+        <div class="about-contact-grid">
+            <div class="about-contact-item">
+                <span>HOTLINE</span>
+                <a href="tel:19008079">1900 8079</a>
+                <p>8:30 — 19:00<br>Tất cả các ngày trong tuần</p>
+            </div>
 
+            <div class="about-contact-item">
+                <span>VĂN PHÒNG PHÍA BẮC</span>
+                <p>Tầng 17, Tòa nhà Viwaseen<br>48 Tố Hữu, Đại Mỗ, Hà Nội</p>
+                <a class="about-contact-action" href="https://www.google.com/maps/search/?api=1&query=Viwaseen+48+Tố+Hữu+Đại+Mỗ+Hà+Nội" target="_blank" rel="noopener">XEM BẢN ĐỒ ↗</a>
+            </div>
 
+            <div class="about-contact-item">
+                <span>VĂN PHÒNG PHÍA NAM</span>
+                <p>186A Nam Kỳ Khởi Nghĩa<br>Phường Xuân Hòa, TP.HCM</p>
+                <a class="about-contact-action" href="https://www.google.com/maps/search/?api=1&query=186A+Nam+Kỳ+Khởi+Nghĩa+TP.HCM" target="_blank" rel="noopener">XEM BẢN ĐỒ ↗</a>
+            </div>
 
-
-        <div class="about-block reveal">
-
-            <h2>Our Philosophy</h2>
-
-            <p>
-
-                Fashion should be timeless rather than seasonal.
-                Every collection is carefully designed to ensure that
-                each garment remains relevant for years to come.
-                We pursue a balance between modern aesthetics and
-                everyday practicality, allowing customers to build
-                a wardrobe that is both versatile and elegant.
-
-            </p>
-
+            <div class="about-contact-item">
+                <span>TRỰC TUYẾN</span>
+                <a href="mailto:support@owen.vn">support@owen.vn</a>
+                <a class="about-contact-action" href="https://owen.vn/" target="_blank" rel="noopener">OWEN.VN ↗</a>
+            </div>
         </div>
 
-
-
-
-
-        <div class="about-block reveal">
-
-            <h2>Materials & Quality</h2>
-
-            <p>
-
-                Every fabric is selected with care, from soft cotton
-                and premium wool to breathable linen. Our production
-                process emphasizes precision, durability and comfort,
-                ensuring that every piece meets the highest standards
-                before reaching our customers.
-
-            </p>
-
+        <div class="about-social">
+            <p>THEO DÕI OWEN</p>
+            <div>
+                <a href="https://www.facebook.com/OWENFashionVN/" target="_blank" rel="noopener" aria-label="Facebook OWEN Fashion Việt Nam">
+                    <span>Facebook</span><strong>↗</strong>
+                </a>
+                <a href="https://www.instagram.com/owen_fashion/" target="_blank" rel="noopener" aria-label="Instagram OWEN Fashion">
+                    <span>Instagram</span><strong>↗</strong>
+                </a>
+                <a href="https://owen.vn/he-thong-cua-hang" target="_blank" rel="noopener" aria-label="Hệ thống cửa hàng OWEN">
+                    <span>Hệ thống cửa hàng</span><strong>↗</strong>
+                </a>
+            </div>
         </div>
+    </section>
+</main>
 
+<footer><p>2026 - OWEN Việt Nam</p></footer>
 
-
-
-
-        <div class="about-block reveal">
-
-            <h2>Craftsmanship</h2>
-
-            <p>
-
-                Behind every OWEN collection is a commitment to
-                exceptional craftsmanship. We work closely with skilled
-                designers and manufacturers to ensure every stitch,
-                every cut and every finish reflects our dedication to
-                quality. We believe that thoughtful construction is
-                what transforms clothing into lasting essentials.
-
-            </p>
-
-        </div>
-
-
-
-
-
-        <div class="about-block reveal">
-
-            <h2>Sustainability</h2>
-
-            <p>
-
-                We recognize the importance of responsible fashion.
-                OWEN continuously seeks better materials, efficient
-                production methods and long-lasting designs that reduce
-                unnecessary consumption. Creating garments that people
-                will wear and appreciate for years is one of the most
-                sustainable choices we can make.
-
-            </p>
-
-        </div>
-
-
-
-
-
-        <div class="about-block reveal">
-
-            <h2>Our Vision</h2>
-
-            <p>
-
-                Our vision is to become a trusted destination for
-                individuals who appreciate understated elegance and
-                premium quality. We strive to create collections that
-                inspire confidence while celebrating simplicity,
-                authenticity and timeless design.
-
-            </p>
-
-        </div>
-
-
-
-
-
-        <div class="about-block reveal">
-
-            <h2>Contact</h2>
-
-            <p>
-
-                OWEN Vietnam<br>
-                Email: support@owen.vn<br>
-                Phone: (+84) 0123 456 789<br>
-                Address: Hanoi, Vietnam
-
-            </p>
-
-        </div>
-
-    </div>
-
-</section>
-
-
-
-
-
-<footer>
-
-    <p>
-        2026 - OWEN Viet Nam
-    </p>
-
-</footer>
-
-<!-- AUTH MODAL -->
 <div id="authModal" class="auth-modal">
     <div class="auth-container">
-        <!-- LOGIN FORM -->
         <div id="loginForm">
             <h2>LOGIN</h2>
             <div id="loginError"></div>
             <form autocomplete="off" onsubmit="handleLogin(event)">
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="loginEmail" name="loginEmail" autocomplete="off" placeholder="your@email.com" required>
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="loginPassword" name="loginPassword" autocomplete="off" placeholder="Minimum 6 characters" required>
-                </div>
+                <div class="form-group"><label>Email</label><input type="email" id="loginEmail" name="loginEmail" autocomplete="off" placeholder="your@email.com" required></div>
+                <div class="form-group"><label>Password</label><input type="password" id="loginPassword" name="loginPassword" autocomplete="off" placeholder="Minimum 6 characters" required></div>
                 <button type="submit" class="auth-btn">LOGIN</button>
             </form>
-            <div class="auth-toggle">
-                Chưa có tài khoản?
-                <button onclick="switchToRegister()">Đăng ký</button>
-            </div>
+            <div class="auth-toggle">Chưa có tài khoản? <button onclick="switchToRegister()">Đăng ký</button></div>
         </div>
-
-        <!-- REGISTER FORM -->
         <div id="registerForm" style="display:none;">
             <h2>REGISTER</h2>
             <div id="registerError"></div>
             <form autocomplete="off" onsubmit="handleRegister(event)">
-                <div class="form-group">
-                    <label>Full Name</label>
-                    <input type="text" id="registerName" name="registerName" autocomplete="off" placeholder="Your name" required>
-                </div>
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="registerEmail" name="registerEmail" autocomplete="off" placeholder="your@email.com" required>
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="registerPassword" name="registerPassword" autocomplete="off" placeholder="Minimum 6 characters" required>
-                </div>
-                <div class="form-group">
-                    <label>Confirm Password</label>
-                    <input type="password" id="registerConfirmPassword" name="registerConfirmPassword" autocomplete="off" placeholder="Confirm password" required>
-                </div>
+                <div class="form-group"><label>Full Name</label><input type="text" id="registerName" name="registerName" autocomplete="off" placeholder="Your name" required></div>
+                <div class="form-group"><label>Email</label><input type="email" id="registerEmail" name="registerEmail" autocomplete="off" placeholder="your@email.com" required></div>
+                <div class="form-group"><label>Password</label><input type="password" id="registerPassword" name="registerPassword" autocomplete="off" placeholder="Minimum 6 characters" required></div>
+                <div class="form-group"><label>Confirm Password</label><input type="password" id="registerConfirmPassword" name="registerConfirmPassword" autocomplete="off" placeholder="Confirm password" required></div>
                 <button type="submit" class="auth-btn">REGISTER</button>
             </form>
-            <div class="auth-toggle">
-                Đã có tài khoản?
-                <button onclick="switchToLogin()">Đăng nhập</button>
-            </div>
+            <div class="auth-toggle">Đã có tài khoản? <button onclick="switchToLogin()">Đăng nhập</button></div>
         </div>
-        <div style="text-align:center; margin-bottom:12px;">
-            <button class="guest-btn" onclick="handleGuestLogin()">Tiếp tục với tư cách Khách</button>
-        </div>
+        <div style="text-align:center;margin-bottom:12px"><button class="guest-btn" onclick="handleGuestLogin()">Tiếp tục với tư cách Khách</button></div>
     </div>
 </div>
-
 <script src="../script.js"></script>
-
 </body>
-
 </html>
-```
-

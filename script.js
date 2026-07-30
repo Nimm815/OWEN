@@ -1,5 +1,17 @@
 const header = document.querySelector("header");
 
+// Highlight the menu item that matches the page currently being viewed.
+const currentPage = window.location.pathname.split("/").pop() || "index.html";
+
+document.querySelectorAll("header nav a").forEach(link => {
+    const linkPage = new URL(link.href, window.location.href).pathname.split("/").pop() || "index.html";
+
+    if (linkPage === currentPage) {
+        link.classList.add("nav-active");
+        link.setAttribute("aria-current", "page");
+    }
+});
+
 window.addEventListener("scroll",()=>{
 
 if(window.scrollY>50){
