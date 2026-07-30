@@ -48,8 +48,11 @@ observer.observe(item);
 
 });
 
-// An empty base URL calls the API from the same domain in both local and deployed environments.
-const API_BASE_URL = '';
+// Production serves the frontend and API from one origin. VS Code Live Server
+// uses another port, so local pages must call the Node backend on port 3000.
+const isLocalLiveServer = ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    && window.location.port !== '3000';
+const API_BASE_URL = isLocalLiveServer ? 'http://127.0.0.1:3000' : '';
 
 // ================= STOREFRONT PRODUCTS =================
 
@@ -560,8 +563,17 @@ function initAiChat() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: cleanQuestion, history: aiChatHistory })
             });
-            const data = await response.json();
+            const responseText = await response.text();
+            let data = {};
+            if (responseText) {
+                try {
+                    data = JSON.parse(responseText);
+                } catch {
+                    throw new Error(`Backend trả về dữ liệu không hợp lệ (HTTP ${response.status}).`);
+                }
+            }
             if (!response.ok) throw new Error(data.message || 'Không thể nhận câu trả lời.');
+            if (!data.answer) throw new Error('Backend không trả về nội dung từ trợ lý AI.');
             addAiMessage('assistant', data.answer);
             aiChatHistory.push(
                 { role: 'user', content: cleanQuestion },
@@ -569,7 +581,10 @@ function initAiChat() {
             );
             if (aiChatHistory.length > 12) aiChatHistory.splice(0, aiChatHistory.length - 12);
         } catch (error) {
-            addAiMessage('error', error.message);
+            const message = error instanceof TypeError
+                ? 'Không kết nối được backend. Hãy chạy npm start và thử lại.'
+                : error.message;
+            addAiMessage('error', message);
         } finally {
             input.disabled = false;
             submitButton.disabled = false;
