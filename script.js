@@ -48,7 +48,8 @@ observer.observe(item);
 
 });
 
-const API_BASE_URL = 'http://localhost:3000';
+// An empty base URL calls the API from the same domain in both local and deployed environments.
+const API_BASE_URL = '';
 
 // ================= STOREFRONT PRODUCTS =================
 
