@@ -36,12 +36,14 @@ app.use('/admin', express.static(path.join(__dirname, 'admin')));
 app.use('/assets/css/admin', express.static(path.join(__dirname, 'assets', 'css', 'admin')));
 app.use('/assets/js/admin', express.static(path.join(__dirname, 'assets', 'js', 'admin')));
 
+const databaseUrl = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
+
 const poolConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  host: databaseUrl?.hostname || process.env.DB_HOST || 'localhost',
+  port: databaseUrl?.port ? parseInt(databaseUrl.port, 10) : (process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306),
+  user: databaseUrl ? decodeURIComponent(databaseUrl.username) : process.env.DB_USER,
+  password: databaseUrl ? decodeURIComponent(databaseUrl.password) : process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || (databaseUrl ? databaseUrl.pathname.replace(/^\//, '') : undefined),
   ...(process.env.DB_SSL === 'true' ? {
     ssl: { rejectUnauthorized: false }
   } : {}),
@@ -810,4 +812,3 @@ app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
-
