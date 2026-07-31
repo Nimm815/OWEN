@@ -44,6 +44,9 @@ const poolConfig = {
   user: databaseUrl ? decodeURIComponent(databaseUrl.username) : process.env.DB_USER,
   password: databaseUrl ? decodeURIComponent(databaseUrl.password) : process.env.DB_PASSWORD,
   database: process.env.DB_NAME || (databaseUrl ? databaseUrl.pathname.replace(/^\//, '') : undefined),
+  // Database timestamps are stored in UTC. Always decode MySQL DATETIME values as
+  // UTC so clients can convert them to their own local timezone consistently.
+  timezone: 'Z',
   ...(process.env.DB_SSL === 'true' ? {
     ssl: { rejectUnauthorized: false }
   } : {}),
