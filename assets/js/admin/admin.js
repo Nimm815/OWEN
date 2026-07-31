@@ -16,6 +16,24 @@ function announceOrderUpdate(orderId, status) {
   localStorage.setItem('owenOrderUpdate', JSON.stringify(update));
 }
 
+function updateAdminMessageBadge(count) {
+  const badge = document.getElementById('adminMessageBadge');
+  if (!badge) return;
+  const unreadCount = Number(count || 0);
+  badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+  badge.hidden = unreadCount === 0;
+}
+
+async function refreshAdminMessageBadge() {
+  if (!getAuthHeader()) return updateAdminMessageBadge(0);
+  try {
+    const data = await request('/api/admin/messages');
+    updateAdminMessageBadge(data.unreadCount);
+  } catch {
+    updateAdminMessageBadge(0);
+  }
+}
+
 function getAuthHeader() {
   const token = localStorage.getItem('authToken') || localStorage.getItem('auth_token');
   return token ? `Bearer ${token}` : '';
@@ -89,6 +107,7 @@ async function loadPage(page) {
       const [messageData, userData] = await Promise.all([
         request('/api/admin/messages'), request('/api/admin/users')
       ]);
+      updateAdminMessageBadge(messageData.unreadCount);
       renderAdminMessages(messageData.messages || [], (userData.users || []).filter(user => user.role === 'ROLE_USER'));
     }
     else if (page === 'users') renderUsers((await request('/api/admin/users')).users || []);
@@ -154,6 +173,7 @@ function renderAdminMessages(messages, users = []) {
       <form class="admin-chat-form"><textarea name="content" maxlength="1000" placeholder="Nhập tin nhắn..." required></textarea><button class="btn btn-primary">Gửi</button></form>`;
     box.querySelector('.admin-chat-messages').scrollTop = box.querySelector('.admin-chat-messages').scrollHeight;
     await request(`/api/admin/messages/${customer.id}/read`, { method: 'PUT' });
+    refreshAdminMessageBadge();
     box.querySelector('form').onsubmit = async event => {
       event.preventDefault();
       const content = event.currentTarget.elements.content.value.trim();
@@ -459,4 +479,10 @@ document.getElementById('logoutBtn').onclick = () => {
   const isBackendServer = window.location.port === '3000';
   window.location.href = isBackendServer ? '/' : '/HTML/index.html';
 };
+window.addEventListener('storage', event => {
+  if (event.key === 'owenMessageUpdate') refreshAdminMessageBadge();
+});
+window.addEventListener('focus', refreshAdminMessageBadge);
+window.setInterval(refreshAdminMessageBadge, 5000);
+refreshAdminMessageBadge();
 loadPage('dashboard');

@@ -717,7 +717,11 @@ app.get('/api/admin/messages', authenticateToken, isAdmin, async (req, res) => {
        ORDER BY m.CreatedAt ASC
        LIMIT 1000`
     );
-    return res.json({ messages });
+    const [[{ unreadCount }]] = await pool.execute(
+      'SELECT COUNT(*) AS unreadCount FROM Messages WHERE ReceiverId = ? AND IsRead = 0',
+      [req.user.id]
+    );
+    return res.json({ messages, unreadCount });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Không thể tải hộp thư.' });
