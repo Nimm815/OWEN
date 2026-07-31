@@ -222,6 +222,43 @@ async function getStoreSettings() {
   }, { ...defaultStoreSettings });
 }
 
+async function ensureNotificationsTable() {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS Notifications (
+      Id INT AUTO_INCREMENT PRIMARY KEY,
+      UserId INT NOT NULL,
+      OrderId INT NULL,
+      Title VARCHAR(200) NOT NULL,
+      Message TEXT NOT NULL,
+      Type ENUM('ORDER_CONFIRMED','ORDER_DELIVERED','ORDER_CANCELLED','GENERAL') NOT NULL DEFAULT 'GENERAL',
+      IsRead TINYINT(1) NOT NULL DEFAULT 0,
+      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE ON UPDATE CASCADE,
+      FOREIGN KEY (OrderId) REFERENCES Orders(Id) ON DELETE SET NULL ON UPDATE CASCADE,
+      INDEX idx_notifications_user_read (UserId, IsRead, CreatedAt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+async function ensureMessagesTable() {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS Messages (
+      Id INT AUTO_INCREMENT PRIMARY KEY,
+      SenderId INT NOT NULL,
+      ReceiverId INT NOT NULL,
+      OrderId INT NULL,
+      Content TEXT NOT NULL,
+      IsRead TINYINT(1) NOT NULL DEFAULT 0,
+      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (SenderId) REFERENCES Users(Id) ON DELETE CASCADE ON UPDATE CASCADE,
+      FOREIGN KEY (ReceiverId) REFERENCES Users(Id) ON DELETE CASCADE ON UPDATE CASCADE,
+      FOREIGN KEY (OrderId) REFERENCES Orders(Id) ON DELETE SET NULL ON UPDATE CASCADE,
+      INDEX idx_messages_sender (SenderId, CreatedAt),
+      INDEX idx_messages_receiver_read (ReceiverId, IsRead, CreatedAt)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
 const aiRateLimits = new Map();
 
 function canUseAiChat(ip) {
@@ -558,6 +595,173 @@ app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
   }
 });
 
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    await ensureNotificationsTable();
+    const [notifications] = await pool.execute(
+      `SELECT Id AS id, OrderId AS orderId, Title AS title, Message AS message,
+              Type AS type, IsRead AS isRead, CreatedAt AS createdAt
+       FROM Notifications
+       WHERE UserId = ?
+       ORDER BY CreatedAt DESC
+       LIMIT 50`,
+      [req.user.id]
+    );
+    const [[{ unreadCount }]] = await pool.execute(
+      'SELECT COUNT(*) AS unreadCount FROM Notifications WHERE UserId = ? AND IsRead = 0',
+      [req.user.id]
+    );
+    return res.json({ notifications, unreadCount });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải thông báo.' });
+  }
+});
+
+app.put('/api/notifications/read', authenticateToken, async (req, res) => {
+  try {
+    await ensureNotificationsTable();
+    const [result] = await pool.execute(
+      'UPDATE Notifications SET IsRead = 1 WHERE UserId = ? AND IsRead = 0',
+      [req.user.id]
+    );
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể cập nhật thông báo.' });
+  }
+});
+
+app.get('/api/messages/shop', authenticateToken, async (req, res) => {
+  try {
+    await ensureMessagesTable();
+    const [messages] = await pool.execute(
+      `SELECT m.Id AS id, m.SenderId AS senderId, m.ReceiverId AS receiverId,
+              m.OrderId AS orderId, m.Content AS content, m.IsRead AS isRead,
+              m.CreatedAt AS createdAt, s.Name AS senderName
+       FROM Messages m
+       INNER JOIN Users s ON s.Id = m.SenderId
+       INNER JOIN Users otherUser ON otherUser.Id =
+         CASE WHEN m.SenderId = ? THEN m.ReceiverId ELSE m.SenderId END
+       WHERE (m.SenderId = ? OR m.ReceiverId = ?)
+         AND otherUser.Role IN ('ADMIN', 'ROLE_ADMIN')
+       ORDER BY m.CreatedAt ASC
+       LIMIT 200`,
+      [req.user.id, req.user.id, req.user.id]
+    );
+    const unreadCount = messages.filter(message =>
+      Number(message.receiverId) === Number(req.user.id) && !message.isRead
+    ).length;
+    return res.json({ messages, unreadCount });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải tin nhắn.' });
+  }
+});
+
+app.post('/api/messages/shop', authenticateToken, async (req, res) => {
+  const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+  const orderId = req.body.orderId ? Number(req.body.orderId) : null;
+  if (!content || content.length > 1000) {
+    return res.status(400).json({ message: 'Tin nhắn phải có từ 1 đến 1000 ký tự.' });
+  }
+  try {
+    await ensureMessagesTable();
+    const [admins] = await pool.execute(
+      `SELECT Id AS id FROM Users
+       WHERE Role IN ('ADMIN', 'ROLE_ADMIN')
+       ORDER BY Id LIMIT 1`
+    );
+    if (!admins.length) return res.status(503).json({ message: 'Chưa có tài khoản quản trị để nhận tin.' });
+    if (orderId) {
+      const [orders] = await pool.execute('SELECT Id FROM Orders WHERE Id = ? AND UserId = ?', [orderId, req.user.id]);
+      if (!orders.length) return res.status(403).json({ message: 'Đơn hàng không hợp lệ.' });
+    }
+    const [result] = await pool.execute(
+      'INSERT INTO Messages (SenderId, ReceiverId, OrderId, Content) VALUES (?, ?, ?, ?)',
+      [req.user.id, admins[0].id, orderId, content]
+    );
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể gửi tin nhắn.' });
+  }
+});
+
+app.put('/api/messages/shop/read', authenticateToken, async (req, res) => {
+  try {
+    await ensureMessagesTable();
+    const [result] = await pool.execute(
+      'UPDATE Messages SET IsRead = 1 WHERE ReceiverId = ? AND IsRead = 0',
+      [req.user.id]
+    );
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể cập nhật tin nhắn.' });
+  }
+});
+
+app.get('/api/admin/messages', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    await ensureMessagesTable();
+    const [messages] = await pool.execute(
+      `SELECT m.Id AS id, m.SenderId AS senderId, m.ReceiverId AS receiverId,
+              m.OrderId AS orderId, m.Content AS content, m.IsRead AS isRead,
+              m.CreatedAt AS createdAt, sender.Name AS senderName,
+              sender.Role AS senderRole, receiver.Name AS receiverName,
+              receiver.Role AS receiverRole
+       FROM Messages m
+       INNER JOIN Users sender ON sender.Id = m.SenderId
+       INNER JOIN Users receiver ON receiver.Id = m.ReceiverId
+       ORDER BY m.CreatedAt ASC
+       LIMIT 1000`
+    );
+    return res.json({ messages });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải hộp thư.' });
+  }
+});
+
+app.post('/api/admin/messages/:userId', authenticateToken, isAdmin, async (req, res) => {
+  const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+  const userId = Number(req.params.userId);
+  if (!content || content.length > 1000 || !Number.isInteger(userId)) {
+    return res.status(400).json({ message: 'Tin nhắn không hợp lệ.' });
+  }
+  try {
+    await ensureMessagesTable();
+    const [users] = await pool.execute(
+      "SELECT Id FROM Users WHERE Id = ? AND Role = 'ROLE_USER'",
+      [userId]
+    );
+    if (!users.length) return res.status(404).json({ message: 'Không tìm thấy khách hàng.' });
+    const [result] = await pool.execute(
+      'INSERT INTO Messages (SenderId, ReceiverId, Content) VALUES (?, ?, ?)',
+      [req.user.id, userId, content]
+    );
+    return res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể gửi tin nhắn.' });
+  }
+});
+
+app.put('/api/admin/messages/:userId/read', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    await ensureMessagesTable();
+    const [result] = await pool.execute(
+      'UPDATE Messages SET IsRead = 1 WHERE SenderId = ? AND ReceiverId = ? AND IsRead = 0',
+      [req.params.userId, req.user.id]
+    );
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể cập nhật tin nhắn.' });
+  }
+});
+
 // Admin product management
 app.get('/api/admin/products', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -870,9 +1074,13 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
   if (!isValidOrderStatus(status)) return res.status(400).json({ message: 'Trạng thái đơn hàng không hợp lệ.' });
   let connection;
   try {
+    await ensureNotificationsTable();
     connection = await pool.getConnection();
     await connection.beginTransaction();
-    const [orders] = await connection.execute('SELECT Status AS status FROM Orders WHERE Id = ? FOR UPDATE', [req.params.id]);
+    const [orders] = await connection.execute(
+      'SELECT Status AS status, UserId AS userId, OrderCode AS orderCode FROM Orders WHERE Id = ? FOR UPDATE',
+      [req.params.id]
+    );
     if (!orders.length) {
       await connection.rollback();
       return res.status(404).json({ message: 'Không tìm thấy đơn hàng.' });
@@ -899,6 +1107,32 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
       );
     }
     const [result] = await connection.execute('UPDATE Orders SET Status = ? WHERE Id = ?', [status, req.params.id]);
+    if (status !== currentStatus && orders[0].userId) {
+      const notificationByStatus = {
+        SHIPPING: {
+          title: 'Đơn hàng đã được xác nhận',
+          message: `Đơn ${orders[0].orderCode} đã được cửa hàng xác nhận và đang được giao.`,
+          type: 'ORDER_CONFIRMED'
+        },
+        DELIVERED: {
+          title: 'Giao hàng thành công',
+          message: `Đơn ${orders[0].orderCode} đã được giao thành công. Cảm ơn bạn đã mua hàng tại OWEN!`,
+          type: 'ORDER_DELIVERED'
+        },
+        CANCELLED: {
+          title: 'Đơn hàng đã bị hủy',
+          message: `Đơn ${orders[0].orderCode} đã được cửa hàng hủy.`,
+          type: 'ORDER_CANCELLED'
+        }
+      };
+      const notification = notificationByStatus[status];
+      if (notification) {
+        await connection.execute(
+          'INSERT INTO Notifications (UserId, OrderId, Title, Message, Type) VALUES (?, ?, ?, ?, ?)',
+          [orders[0].userId, req.params.id, notification.title, notification.message, notification.type]
+        );
+      }
+    }
     await connection.commit();
     return res.json({ affectedRows: result.affectedRows });
   } catch (err) {

@@ -492,6 +492,8 @@ function updateAuthUI() {
     }
     updateCartButton();
     updateAccountButton();
+    updateNotificationButton();
+    updateShopChatButton();
 }
 
 // ================= CART / CUSTOMER ORDERS =================
@@ -503,6 +505,16 @@ const orderStatusLabels = {
     DELIVERED: 'Đã giao',
     CANCELLED: 'Đã hủy'
 };
+
+const customerOrderUpdateChannel = typeof BroadcastChannel !== 'undefined'
+    ? new BroadcastChannel('owen-order-updates')
+    : null;
+
+customerOrderUpdateChannel?.addEventListener('message', () => loadNotifications());
+window.addEventListener('storage', event => {
+    if (event.key === 'owenOrderUpdate') loadNotifications();
+});
+window.addEventListener('focus', () => loadNotifications());
 
 function ensureCartDrawer() {
     if (document.getElementById('cartDrawer')) return;
@@ -527,6 +539,25 @@ function ensureCartDrawer() {
         headerElement.appendChild(headerActions);
         headerActions.appendChild(cartButton);
         headerActions.insertAdjacentHTML('beforeend', `
+          <div class="notification-menu-wrap">
+            <button id="notificationButton" class="notification-button" type="button" aria-label="Thông báo" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+                <path d="M10 21h4"></path>
+              </svg>
+              <span id="notificationCount" hidden>0</span>
+            </button>
+            <div id="notificationDropdown" class="notification-dropdown" hidden>
+              <div class="notification-heading">
+                <strong>Thông báo</strong>
+                <div>
+                  <button type="button" id="notificationReadAll" class="notification-read-all">Đánh dấu đã đọc</button>
+                  <button type="button" id="notificationClose" class="notification-close">&times;</button>
+                </div>
+              </div>
+              <div id="notificationList" class="notification-list"></div>
+            </div>
+          </div>
           <div class="account-menu-wrap">
             <button id="accountButton" class="account-button" type="button" aria-label="Tài khoản" aria-expanded="false">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -541,6 +572,9 @@ function ensureCartDrawer() {
         if (menuButton) headerActions.appendChild(menuButton);
     }
     document.getElementById('accountButton').onclick = toggleAccountMenu;
+    document.getElementById('notificationButton').onclick = toggleNotificationMenu;
+    document.getElementById('notificationClose').onclick = closeNotificationMenu;
+    document.getElementById('notificationReadAll').onclick = markAllNotificationsRead;
 
     document.body.insertAdjacentHTML('beforeend', `
       <div id="cartBackdrop" class="cart-backdrop" aria-hidden="true"></div>
@@ -553,6 +587,94 @@ function ensureCartDrawer() {
       </aside>`);
     document.getElementById('cartClose').onclick = closeCartDrawer;
     document.getElementById('cartBackdrop').onclick = closeCartDrawer;
+}
+
+function updateNotificationButton(unreadCount) {
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const isSignedIn = user && !user.guest && localStorage.getItem('authToken');
+    const wrap = document.querySelector('.notification-menu-wrap');
+    if (wrap) wrap.hidden = !isSignedIn;
+    const badge = document.getElementById('notificationCount');
+    if (badge && Number.isInteger(unreadCount)) {
+        badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+        badge.hidden = unreadCount === 0;
+    }
+}
+
+function notificationTime(value) {
+    if (!value) return '';
+    return new Date(value).toLocaleString('vi-VN', {
+        hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric'
+    });
+}
+
+async function loadNotifications() {
+    const token = localStorage.getItem('authToken');
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    if (!token || !user || user.guest) {
+        updateNotificationButton(0);
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/notifications`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể tải thông báo.');
+        updateNotificationButton(Number(data.unreadCount || 0));
+        const list = document.getElementById('notificationList');
+        const notifications = data.notifications || [];
+        list.innerHTML = notifications.length ? notifications.map(item => `
+          <article class="notification-item ${item.isRead ? '' : 'unread'}">
+            <span class="notification-icon notification-${escapeHtml(item.type.toLowerCase())}"></span>
+            <div>
+              <strong>${escapeHtml(item.title)}</strong>
+              <p>${escapeHtml(item.message)}</p>
+              <time>${notificationTime(item.createdAt)}</time>
+            </div>
+          </article>`).join('') : '<p class="notification-empty">Bạn chưa có thông báo nào.</p>';
+    } catch (error) {
+        const list = document.getElementById('notificationList');
+        if (list) list.innerHTML = `<p class="notification-empty notification-error">${escapeHtml(error.message)}</p>`;
+    }
+}
+
+async function toggleNotificationMenu(event) {
+    event?.stopPropagation();
+    const dropdown = document.getElementById('notificationDropdown');
+    const willOpen = dropdown.hidden;
+    dropdown.hidden = !willOpen;
+    document.getElementById('notificationButton').setAttribute('aria-expanded', String(willOpen));
+    document.getElementById('accountDropdown').hidden = true;
+    if (!willOpen) return;
+    await loadNotifications();
+}
+
+async function markAllNotificationsRead(event) {
+    event?.stopPropagation();
+    const button = document.getElementById('notificationReadAll');
+    button.disabled = true;
+    button.textContent = 'Đang cập nhật...';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/notifications/read`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
+        });
+        if (!response.ok) throw new Error('Không thể đánh dấu thông báo.');
+        updateNotificationButton(0);
+        document.querySelectorAll('.notification-item.unread').forEach(item => item.classList.remove('unread'));
+    } catch (error) {
+        window.alert(error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Đánh dấu đã đọc';
+    }
+}
+
+function closeNotificationMenu() {
+    const dropdown = document.getElementById('notificationDropdown');
+    if (dropdown) dropdown.hidden = true;
+    document.getElementById('notificationButton')?.setAttribute('aria-expanded', 'false');
 }
 
 function updateAccountButton() {
@@ -685,6 +807,127 @@ function showError(errorDiv, message) {
     errorDiv.innerHTML = `<div class="error-message">${message}</div>`;
 }
 
+// ================= SHOP MESSAGING =================
+
+function updateShopChatButton(unreadCount) {
+    const widget = document.querySelector('.shop-chat-widget');
+    if (!widget) return;
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const signedIn = user && !user.guest && localStorage.getItem('authToken');
+    widget.hidden = !signedIn;
+    const badge = document.getElementById('shopChatCount');
+    if (badge && Number.isInteger(unreadCount)) {
+        badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+        badge.hidden = unreadCount === 0;
+    }
+}
+
+async function loadShopMessages(markRead = false) {
+    const token = localStorage.getItem('authToken');
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    if (!token || !user || user.guest) {
+        updateShopChatButton(0);
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/messages/shop`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể tải tin nhắn.');
+        updateShopChatButton(Number(data.unreadCount || 0));
+        const mount = document.getElementById('shopChatMessages');
+        if (mount) {
+            mount.innerHTML = (data.messages || []).length ? data.messages.map(message => `
+              <article class="shop-message ${Number(message.senderId) === Number(user.id) ? 'sent' : 'received'}">
+                <p>${escapeHtml(message.content)}</p>
+                <time>${notificationTime(message.createdAt)}</time>
+              </article>`).join('') : '<p class="shop-chat-empty">Hãy gửi lời nhắn đầu tiên cho OWEN.</p>';
+            mount.scrollTop = mount.scrollHeight;
+        }
+        if (markRead && Number(data.unreadCount) > 0) {
+            await fetch(`${API_BASE_URL}/api/messages/shop/read`, {
+                method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+            });
+            updateShopChatButton(0);
+        }
+    } catch (error) {
+        const mount = document.getElementById('shopChatMessages');
+        if (mount) mount.innerHTML = `<p class="shop-chat-empty shop-chat-error">${escapeHtml(error.message)}</p>`;
+    }
+}
+
+function initShopChat() {
+    const widget = document.createElement('section');
+    widget.className = 'shop-chat-widget';
+    widget.hidden = true;
+    widget.innerHTML = `
+      <button class="shop-chat-toggle" type="button" aria-label="Nhắn tin cho shop" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 15a4 4 0 0 1-4 4H8l-5 3 1.7-5.1A8 8 0 1 1 21 15Z"></path>
+        </svg>
+        <span id="shopChatCount" hidden>0</span>
+      </button>
+      <div class="shop-chat-panel" aria-hidden="true">
+        <header class="shop-chat-header">
+          <div><strong>Nhắn tin với OWEN</strong><span>Shop sẽ phản hồi sớm nhất</span></div>
+          <button type="button" class="shop-chat-close" aria-label="Đóng">&times;</button>
+        </header>
+        <div id="shopChatMessages" class="shop-chat-messages"></div>
+        <form class="shop-chat-form">
+          <textarea name="content" maxlength="1000" rows="1" placeholder="Nhập tin nhắn..." required></textarea>
+          <button type="submit">Gửi</button>
+        </form>
+      </div>`;
+    document.body.appendChild(widget);
+    const toggle = widget.querySelector('.shop-chat-toggle');
+    const panel = widget.querySelector('.shop-chat-panel');
+    const close = widget.querySelector('.shop-chat-close');
+    const form = widget.querySelector('.shop-chat-form');
+    const setOpen = open => {
+        panel.classList.toggle('open', open);
+        panel.setAttribute('aria-hidden', String(!open));
+        toggle.setAttribute('aria-expanded', String(open));
+        if (open) {
+            loadShopMessages(true);
+            form.elements.content.focus();
+        }
+    };
+    toggle.onclick = () => setOpen(!panel.classList.contains('open'));
+    close.onclick = () => setOpen(false);
+    form.onsubmit = async event => {
+        event.preventDefault();
+        const input = form.elements.content;
+        const content = input.value.trim();
+        if (!content) return;
+        const button = form.querySelector('button');
+        button.disabled = true;
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/messages/shop`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken')}` },
+                body: JSON.stringify({ content })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Không thể gửi tin nhắn.');
+            input.value = '';
+            localStorage.setItem('owenMessageUpdate', String(Date.now()));
+            await loadShopMessages();
+        } catch (error) {
+            window.alert(error.message);
+        } finally {
+            button.disabled = false;
+            input.focus();
+        }
+    };
+    updateShopChatButton();
+    loadShopMessages();
+}
+
+window.addEventListener('storage', event => {
+    if (event.key === 'owenMessageUpdate') loadShopMessages();
+});
+
 // ================= AI SHOPPING ASSISTANT =================
 
 const aiChatHistory = [];
@@ -805,6 +1048,7 @@ document.addEventListener('click', function(event) {
         if (dropdown) dropdown.hidden = true;
         if (button) button.setAttribute('aria-expanded', 'false');
     }
+    if (!event.target.closest('.notification-menu-wrap')) closeNotificationMenu();
     const authModal = document.getElementById('authModal');
     const authContainer = document.querySelector('.auth-container');
     
@@ -822,6 +1066,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initAuth();
     ensureCartDrawer();
     loadCartOrders();
+    loadNotifications();
+    initShopChat();
     initAiChat();
     loadHomepageProducts();
     loadCategoryProducts();
@@ -829,4 +1075,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.getElementById('productGallery')) {
         window.setInterval(loadHomepageProducts, 30000);
     }
+    window.setInterval(loadNotifications, 5000);
+    window.setInterval(() => loadShopMessages(false), 5000);
 });

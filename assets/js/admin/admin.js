@@ -6,6 +6,15 @@ const pageTitle = document.getElementById('pageTitle');
 const pageArea = document.getElementById('pageArea');
 const sidebar = document.getElementById('sidebar');
 let catalog = { brands: [], categories: [], colors: [], sizes: [] };
+const orderUpdateChannel = typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('owen-order-updates')
+  : null;
+
+function announceOrderUpdate(orderId, status) {
+  const update = { orderId, status, updatedAt: Date.now() };
+  orderUpdateChannel?.postMessage(update);
+  localStorage.setItem('owenOrderUpdate', JSON.stringify(update));
+}
 
 function getAuthHeader() {
   const token = localStorage.getItem('authToken') || localStorage.getItem('auth_token');
@@ -76,6 +85,12 @@ async function loadPage(page) {
     else if (['colors', 'sizes', 'categories'].includes(page)) renderCatalogPage(page, (await request(`/api/admin/${page}`))[page] || []);
     else if (page === 'variants') renderVariants((await request('/api/admin/variants')).variants || []);
     else if (page === 'orders') renderOrders((await request('/api/admin/orders')).orders || []);
+    else if (page === 'messages') {
+      const [messageData, userData] = await Promise.all([
+        request('/api/admin/messages'), request('/api/admin/users')
+      ]);
+      renderAdminMessages(messageData.messages || [], (userData.users || []).filter(user => user.role === 'ROLE_USER'));
+    }
     else if (page === 'users') renderUsers((await request('/api/admin/users')).users || []);
     else if (page === 'settings') {
       const [settingsData, accountData] = await Promise.all([
@@ -89,6 +104,69 @@ async function loadPage(page) {
     if (/401|403/.test(error.message)) return renderLogin('Please log in with an admin account.');
     pageArea.innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function renderAdminMessages(messages, users = []) {
+  const isAdminRole = role => ['ADMIN', 'ROLE_ADMIN'].includes(role);
+  const customerMap = new Map();
+  messages.forEach(message => {
+    const customerId = isAdminRole(message.senderRole) ? message.receiverId : message.senderId;
+    const customerName = isAdminRole(message.senderRole) ? message.receiverName : message.senderName;
+    if (!customerMap.has(customerId)) customerMap.set(customerId, { id: customerId, name: customerName, messages: [] });
+    customerMap.get(customerId).messages.push(message);
+  });
+  users.forEach(user => {
+    if (!customerMap.has(user.id)) customerMap.set(user.id, { id: user.id, name: user.name, messages: [] });
+  });
+  const customers = [...customerMap.values()].sort((a, b) =>
+    new Date(b.messages.at(-1)?.createdAt || 0) - new Date(a.messages.at(-1)?.createdAt || 0)
+  );
+  pageArea.innerHTML = `
+    <div class="page-toolbar"><h2>Tin nhắn khách hàng</h2></div>
+    <div class="admin-chat-layout">
+      <aside class="admin-chat-customers">
+        ${customers.length ? customers.map((customer, index) => {
+          const last = customer.messages.at(-1);
+          const unread = customer.messages.filter(item => !isAdminRole(item.senderRole) && !item.isRead).length;
+          return `<button type="button" data-chat-user="${customer.id}" class="${index === 0 ? 'active' : ''}">
+            <span>${escapeHtml(customer.name.charAt(0).toUpperCase())}</span>
+            <div><strong>${escapeHtml(customer.name)}</strong><small>${escapeHtml(last?.content || 'Chưa có tin nhắn')}</small></div>
+            ${unread ? `<b>${unread}</b>` : ''}
+          </button>`;
+        }).join('') : '<p class="no-data">Chưa có tin nhắn.</p>'}
+      </aside>
+      <section class="admin-chat-box" id="adminChatBox"></section>
+    </div>`;
+
+  const openCustomer = async userId => {
+    const customer = customerMap.get(Number(userId));
+    if (!customer) return;
+    pageArea.querySelectorAll('[data-chat-user]').forEach(button =>
+      button.classList.toggle('active', Number(button.dataset.chatUser) === Number(userId))
+    );
+    const box = document.getElementById('adminChatBox');
+    box.innerHTML = `
+      <div class="admin-chat-header"><strong>${escapeHtml(customer.name)}</strong><span>Khách hàng</span></div>
+      <div class="admin-chat-messages">${customer.messages.map(message => `
+        <article class="${isAdminRole(message.senderRole) ? 'sent' : 'received'}">
+          <p>${escapeHtml(message.content)}</p><time>${formatDate(message.createdAt)}</time>
+        </article>`).join('')}</div>
+      <form class="admin-chat-form"><textarea name="content" maxlength="1000" placeholder="Nhập tin nhắn..." required></textarea><button class="btn btn-primary">Gửi</button></form>`;
+    box.querySelector('.admin-chat-messages').scrollTop = box.querySelector('.admin-chat-messages').scrollHeight;
+    await request(`/api/admin/messages/${customer.id}/read`, { method: 'PUT' });
+    box.querySelector('form').onsubmit = async event => {
+      event.preventDefault();
+      const content = event.currentTarget.elements.content.value.trim();
+      if (!content) return;
+      await request(`/api/admin/messages/${customer.id}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+      });
+      localStorage.setItem('owenMessageUpdate', String(Date.now()));
+      loadPage('messages');
+    };
+  };
+  pageArea.querySelectorAll('[data-chat-user]').forEach(button => button.onclick = () => openCustomer(button.dataset.chatUser));
+  if (customers.length) openCustomer(customers[0].id);
 }
 
 function renderDashboard(stats) {
@@ -349,6 +427,7 @@ function renderOrders(orders) {
     if (button.dataset.action === 'cancel' && !window.confirm(`Hủy đơn ${order.orderCode}? Số lượng sản phẩm sẽ được hoàn lại kho.`)) return;
     try {
       await request(`/api/admin/orders/${order.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: nextStatus }) });
+      announceOrderUpdate(order.id, nextStatus);
       loadPage('orders');
     } catch (error) { window.alert(error.message); }
   };
