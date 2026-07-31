@@ -54,6 +54,17 @@ const isLocalLiveServer = ['localhost', '127.0.0.1'].includes(window.location.ho
     && window.location.port !== '3000';
 const API_BASE_URL = isLocalLiveServer ? 'http://127.0.0.1:3000' : '';
 
+async function readApiJson(response) {
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        if (response.status === 401 || response.status === 403) {
+            throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        }
+        throw new Error('Backend chưa được cập nhật hoặc đang không hoạt động.');
+    }
+    return response.json();
+}
+
 // ================= STOREFRONT PRODUCTS =================
 
 function escapeHtml(value) {
@@ -78,7 +89,7 @@ async function loadHomepageProducts() {
 
     try {
         const response = await fetch(`${API_BASE_URL}/api/products?limit=6`);
-        const data = await response.json();
+        const data = await readApiJson(response);
         if (!response.ok) throw new Error(data.message || 'Không thể tải sản phẩm.');
 
         const products = data.products || [];
@@ -111,7 +122,7 @@ async function loadCategoryProducts() {
     grid.innerHTML = '<p class="products-message">Đang tải sản phẩm...</p>';
     try {
         const response = await fetch(`${API_BASE_URL}/api/products?limit=48&category=${encodeURIComponent(category)}`);
-        const data = await response.json();
+        const data = await readApiJson(response);
         if (!response.ok) throw new Error(data.message || 'Không thể tải sản phẩm.');
 
         const products = data.products || [];
@@ -190,14 +201,16 @@ async function openPurchaseModal(productId) {
               ${product.variants.length ? `
                 <label>Màu sắc<select id="purchaseColor" required>${colors.map(v => `<option value="${v.colorId}">${escapeHtml(v.colorName)}</option>`).join('')}</select></label>
                 <label>Kích thước<select id="purchaseSize" required></select></label>
-                <label>Họ tên người nhận<input name="recipientName" required autocomplete="name"></label>
-                <label>Số điện thoại<input name="recipientPhone" required autocomplete="tel"></label>
-                <label>Địa chỉ nhận hàng<textarea name="recipientAddress" required autocomplete="street-address"></textarea></label>
-                <label>Thanh toán<select name="paymentMethod"><option value="COD">Thanh toán khi nhận hàng</option><option value="VNPAY">VNPay</option></select></label>
-                <label>Ghi chú<textarea name="note"></textarea></label>
+                <div class="purchase-quantity"><span>Số lượng</span><div class="quantity-stepper">
+                  <button type="button" data-quantity-action="minus" aria-label="Giảm số lượng">−</button>
+                  <input id="purchaseQuantity" type="number" value="1" min="1" inputmode="numeric" aria-label="Số lượng">
+                  <button type="button" data-quantity-action="plus" aria-label="Tăng số lượng">+</button>
+                </div></div>
                 <p class="purchase-stock" id="purchaseStock"></p>
-                <div class="purchase-price" id="purchasePrice"></div>
-                <button class="purchase-button" type="submit">MUA HÀNG</button>` :
+                <div class="purchase-summary"><span>Tạm tính</span><div class="purchase-price" id="purchasePrice"></div></div>
+                <button class="purchase-button" type="submit">THÊM VÀO GIỎ HÀNG</button>
+                <button class="purchase-buy-now" type="button">MUA NGAY</button>
+                <p class="purchase-assurance">Miễn phí đổi size · Kiểm tra hàng trước khi nhận</p>` :
                 `<div class="purchase-price">${formatPrice(product.price)}</div><p class="purchase-stock">Sản phẩm hiện chưa có màu và size khả dụng.</p><button class="purchase-button" type="button" disabled>HẾT HÀNG</button>`}
             </form>
           </div>`;
@@ -209,61 +222,37 @@ async function openPurchaseModal(productId) {
             size.innerHTML = available.map(v => `<option value="${v.id}">${escapeHtml(v.size)}</option>`).join('');
             updateVariant();
         };
+        const quantity = content.querySelector('#purchaseQuantity');
         const updateVariant = () => {
             const variant = product.variants.find(v => String(v.id) === size.value);
-            content.querySelector('#purchasePrice').textContent = formatPrice(variant?.price || product.price);
+            quantity.max = Math.max(1, Number(variant?.stockQty || 1));
+            quantity.value = Math.min(Number(quantity.max), Math.max(1, Number(quantity.value) || 1));
+            content.querySelector('#purchasePrice').textContent = formatPrice((variant?.price || product.price) * Number(quantity.value));
             content.querySelector('#purchaseStock').textContent = variant ? `Còn ${variant.stockQty} sản phẩm` : '';
         };
         color.onchange = updateSizes;
         size.onchange = updateVariant;
+        quantity.oninput = updateVariant;
+        content.querySelectorAll('[data-quantity-action]').forEach(button => {
+            button.onclick = () => {
+                quantity.value = Math.min(Number(quantity.max), Math.max(1, Number(quantity.value) + (button.dataset.quantityAction === 'plus' ? 1 : -1)));
+                updateVariant();
+            };
+        });
         updateSizes();
-        const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-        if (currentUser?.name && !currentUser.guest) content.querySelector('[name="recipientName"]').value = currentUser.name;
-        content.querySelector('#purchaseForm').onsubmit = async event => {
-            event.preventDefault();
-            const authToken = localStorage.getItem('authToken');
-            const signedInUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-            if (!authToken || !signedInUser || signedInUser.guest) {
-                window.alert('Bạn cần đăng nhập tài khoản để mua hàng.');
-                closePurchaseModal();
-                if (signedInUser?.guest) {
-                    localStorage.removeItem('currentUser');
-                    updateAuthUI();
-                }
-                openAuthModal();
-                return;
-            }
+        const addSelectedToCart = () => {
             const variant = product.variants.find(v => String(v.id) === size.value);
-            const form = event.currentTarget;
-            const button = form.querySelector('.purchase-button');
-            const fields = Object.fromEntries(new FormData(form));
-            button.disabled = true;
-            button.textContent = 'ĐANG TẠO ĐƠN...';
-            try {
-                const response = await fetch(`${API_BASE_URL}/api/orders`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-                    body: JSON.stringify({ ...fields, productVariantId: variant.id, quantity: 1 })
-                });
-                const result = await response.json();
-                if (response.status === 401 || response.status === 403) {
-                    clearAuthData();
-                    updateAuthUI();
-                    closePurchaseModal();
-                    openAuthModal();
-                    throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-                }
-                if (!response.ok) throw new Error(result.message || 'Không thể đặt hàng.');
-                window.alert(`Đặt hàng thành công!\nMã đơn: ${result.orderCode}\nĐơn hàng đang chờ cửa hàng xác nhận.`);
-                closePurchaseModal();
-                await loadCartOrders();
-                openCartDrawer();
-            } catch (error) {
-                window.alert(error.message);
-                button.disabled = false;
-                button.textContent = 'MUA HÀNG';
-            }
+            addToCart({ variantId: variant.id, productId: product.id, title: product.title, imageUrl: product.imageUrl,
+                colorName: variant.colorName, size: variant.size, unitPrice: Number(variant.price || product.price),
+                quantity: Number(quantity.value), stockQty: Number(variant.stockQty) });
         };
+        content.querySelector('#purchaseForm').onsubmit = event => {
+            event.preventDefault();
+            addSelectedToCart();
+            closePurchaseModal();
+            openCartDrawer();
+        };
+        content.querySelector('.purchase-buy-now').onclick = () => { addSelectedToCart(); closePurchaseModal(); openCartDrawer(true); };
     } catch (error) {
         content.innerHTML = `<p class="products-message">${escapeHtml(error.message)}</p>`;
     }
@@ -690,7 +679,12 @@ function updateAccountButton() {
         <strong>${escapeHtml(user.name)}</strong>
         <span>${escapeHtml(user.email)}</span>
       </div>
+      <button class="account-addresses" type="button">THÔNG TIN & ĐỊA CHỈ</button>
       <button class="account-logout" type="button">ĐĂNG XUẤT</button>` : '';
+    dropdown.querySelector('.account-addresses')?.addEventListener('click', () => {
+        dropdown.hidden = true;
+        openAddressManager();
+    });
     dropdown.querySelector('.account-logout')?.addEventListener('click', handleLogout);
 }
 
@@ -711,24 +705,60 @@ function toggleAccountMenu(event) {
 
 function updateCartButton(count) {
     ensureCartDrawer();
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
     const button = document.getElementById('cartButton');
-    if (button) button.hidden = !currentUser || currentUser.guest;
+    if (button) button.hidden = false;
     if (Number.isInteger(count)) document.getElementById('cartCount').textContent = count;
 }
 
-function openCartDrawer() {
+const CART_STORAGE_KEY = 'owenShoppingCart';
+function getShoppingCart() {
+    try { return JSON.parse(localStorage.getItem(CART_STORAGE_KEY) || '[]'); } catch { return []; }
+}
+function saveShoppingCart(cart) {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+    updateCartButton(cart.reduce((sum, item) => sum + item.quantity, 0));
+}
+function addToCart(item) {
+    const cart = getShoppingCart();
+    const existing = cart.find(entry => String(entry.variantId) === String(item.variantId));
+    if (existing) existing.quantity = Math.min(item.stockQty, existing.quantity + item.quantity);
+    else cart.push(item);
+    saveShoppingCart(cart);
+}
+
+function openCartDrawer(focusCheckout = false) {
     ensureCartDrawer();
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-    if (!currentUser || currentUser.guest || !localStorage.getItem('authToken')) {
-        openAuthModal();
-        return;
-    }
+    document.getElementById('cartTitle').textContent = 'Giỏ hàng của bạn';
     document.getElementById('cartDrawer').classList.add('open');
     document.getElementById('cartBackdrop').classList.add('open');
     document.getElementById('cartDrawer').setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
-    loadCartOrders();
+    renderShoppingCart();
+    if (focusCheckout) setTimeout(() => document.querySelector('.checkout-form')?.scrollIntoView({ behavior: 'smooth' }), 120);
+}
+
+function openAddressManager() {
+    ensureCartDrawer();
+    document.getElementById('cartTitle').textContent = 'Thông tin & địa chỉ';
+    document.getElementById('cartDrawer').classList.add('open');
+    document.getElementById('cartBackdrop').classList.add('open');
+    document.getElementById('cartDrawer').setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const content = document.getElementById('cartContent');
+    content.innerHTML = `<div class="address-manager-intro"><p>TÀI KHOẢN OWEN</p><h3>${escapeHtml(user?.name || '')}</h3>
+      <span>${escapeHtml(user?.email || '')}</span><p>Lưu nhiều địa chỉ để thông tin được tự động điền khi mua hàng.</p></div>
+      <form class="checkout-form address-manager-form">
+        <div class="saved-addresses" aria-live="polite"></div>
+        <label>Họ tên<input name="recipientName" value="${escapeHtml(user?.name || '')}" required autocomplete="name"></label>
+        <label>Số điện thoại<input name="recipientPhone" required autocomplete="tel"></label>
+        <label>Địa chỉ<textarea name="recipientAddress" required autocomplete="street-address"></textarea></label>
+        <input type="hidden" name="addressLabel" value="Địa chỉ giao hàng">
+        <button type="button" class="checkout-button save-address-button">LƯU ĐỊA CHỈ</button>
+      </form>`;
+    const form = content.querySelector('form');
+    form.querySelector('.save-address-button').onclick = saveCheckoutAddress;
+    loadSavedAddresses(form);
 }
 
 function closeCartDrawer() {
@@ -743,7 +773,6 @@ async function loadCartOrders() {
     const token = localStorage.getItem('authToken');
     const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
     if (!token || !user || user.guest) {
-        updateCartButton(0);
         return;
     }
     const content = document.getElementById('cartContent');
@@ -755,12 +784,11 @@ async function loadCartOrders() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || 'Không thể tải giỏ hàng.');
         const orders = data.orders || [];
-        updateCartButton(orders.filter(order => order.status !== 'CANCELLED').length);
         if (!orders.length) {
-            content.innerHTML = '<p class="cart-message">Bạn chưa đặt sản phẩm nào.</p>';
+            content.innerHTML = '';
             return;
         }
-        content.innerHTML = orders.map(order => `
+        content.innerHTML = `<section class="order-history"><h3>Đơn hàng gần đây</h3>${orders.map(order => `
           <article class="cart-order">
             <img src="${escapeHtml(productImageUrl(order.imageUrl))}" alt="${escapeHtml(order.productTitle)}">
             <div class="cart-order-info">
@@ -775,11 +803,224 @@ async function loadCartOrders() {
                 ${['UNPAID', 'PENDING'].includes(order.status) ? `<button type="button" data-cancel-order="${order.id}">HỦY ĐƠN</button>` : ''}
               </div>
             </div>
-          </article>`).join('');
+          </article>`).join('')}</section>`;
     } catch (error) {
         content.innerHTML = `<p class="cart-message cart-error">${escapeHtml(error.message)}</p>`;
     }
 }
+
+async function loadOrderHistoryIntoDrawer() {
+    const target = document.getElementById('orderHistory');
+    const main = document.getElementById('cartContent');
+    if (!target || !main || !localStorage.getItem('authToken')) return;
+    main.id = 'cartContentActive';
+    const temporary = document.createElement('div');
+    temporary.id = 'cartContent';
+    document.body.appendChild(temporary);
+    await loadCartOrders();
+    target.innerHTML = temporary.innerHTML;
+    temporary.remove();
+    main.id = 'cartContent';
+}
+
+function renderShoppingCart() {
+    const content = document.getElementById('cartContent');
+    const cart = getShoppingCart();
+    updateCartButton(cart.reduce((sum, item) => sum + item.quantity, 0));
+    if (!cart.length) {
+        content.innerHTML = '<div class="cart-empty"><span>0</span><h3>Giỏ hàng đang trống</h3><p>Chọn một sản phẩm bạn yêu thích để bắt đầu.</p><button type="button" data-close-cart>TIẾP TỤC MUA SẮM</button></div><div id="orderHistory"></div>';
+        loadOrderHistoryIntoDrawer();
+        return;
+    }
+    const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    content.innerHTML = `
+      <div class="cart-items">${cart.map(item => `
+        <article class="shopping-cart-item">
+          <img src="${escapeHtml(productImageUrl(item.imageUrl))}" alt="${escapeHtml(item.title)}">
+          <div><button class="cart-remove" type="button" data-cart-remove="${item.variantId}" aria-label="Xóa sản phẩm">×</button>
+            <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.colorName)} · Size ${escapeHtml(item.size)}</p>
+            <div class="cart-item-bottom"><div class="quantity-stepper small">
+              <button type="button" data-cart-minus="${item.variantId}">−</button><span>${item.quantity}</span><button type="button" data-cart-plus="${item.variantId}">+</button>
+            </div><strong>${formatPrice(item.unitPrice * item.quantity)}</strong></div>
+          </div>
+        </article>`).join('')}</div>
+      <div class="cart-total"><span>Tạm tính</span><strong>${formatPrice(subtotal)}</strong><p>Phí vận chuyển được tính khi đặt hàng.</p></div>
+      <form class="checkout-form">
+        <p class="checkout-kicker">THÔNG TIN NHẬN HÀNG</p>
+        <div class="saved-addresses" aria-live="polite"></div>
+        <label>Họ tên<input name="recipientName" value="${escapeHtml(user?.guest ? '' : user?.name || '')}" required autocomplete="name"></label>
+        <div class="checkout-row"><label>Số điện thoại<input name="recipientPhone" required autocomplete="tel"></label>
+          <label>Thanh toán<select name="paymentMethod"><option value="COD">Khi nhận hàng</option><option value="VNPAY">VNPay</option></select></label></div>
+        <label>Địa chỉ<textarea name="recipientAddress" required autocomplete="street-address"></textarea></label>
+        <input type="hidden" name="addressLabel" value="Địa chỉ giao hàng">
+        <button type="button" class="save-address-button checkout-save-address">LƯU ĐỊA CHỈ NÀY</button>
+        <label>Ghi chú (không bắt buộc)<textarea name="note"></textarea></label>
+        <button class="checkout-button" type="submit">MUA ${itemCount} SẢN PHẨM · ${formatPrice(subtotal)}</button>
+        <p class="checkout-note">Thông tin của bạn chỉ được dùng để giao đơn hàng này.</p>
+      </form><div id="orderHistory"></div>`;
+    content.querySelector('.checkout-form').onsubmit = submitCartCheckout;
+    content.querySelector('.save-address-button').onclick = saveCheckoutAddress;
+    loadSavedAddresses(content.querySelector('.checkout-form'));
+    loadOrderHistoryIntoDrawer();
+}
+
+async function loadSavedAddresses(form, selectId) {
+    const container = form?.querySelector('.saved-addresses');
+    const token = localStorage.getItem('authToken');
+    if (!container) return;
+    if (!token) {
+        container.innerHTML = '<p class="address-hint">Đăng nhập để lưu và dùng lại thông tin giao hàng.</p>';
+        return;
+    }
+    container.innerHTML = '<p class="address-hint">Đang tải địa chỉ đã lưu...</p>';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/user/addresses`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await readApiJson(response);
+        if (!response.ok) throw new Error(data.message || 'Không thể tải địa chỉ.');
+        const addresses = data.addresses || [];
+        if (!addresses.length) {
+            form.querySelector('.address-field-select')?.remove();
+            form.elements.recipientAddress.hidden = false;
+            container.innerHTML = '<p class="address-hint">Bạn chưa có địa chỉ đã lưu. Điền thông tin bên dưới và bấm “Lưu địa chỉ này”.</p>';
+            return;
+        }
+        const isCheckout = !form.classList.contains('address-manager-form');
+        const options = addresses.map(item => `<option value="${item.id}" ${String(item.id) === String(selectId) || (!selectId && item.isDefault) ? 'selected' : ''}>
+          ${item.isDefault ? 'Mặc định — ' : ''}${escapeHtml(item.address)}</option>`).join('');
+        container.innerHTML = `${isCheckout ? '' : `<label>Chọn địa chỉ giao hàng<select class="saved-address-select">${options}</select></label>`}
+          <div class="address-actions"><button type="button" data-address-add>+ THÊM ĐỊA CHỈ KHÁC</button><button type="button" data-address-default>ĐẶT MẶC ĐỊNH</button><button type="button" data-address-delete>XÓA</button></div>`;
+        const addressTextarea = form.elements.recipientAddress;
+        let select = container.querySelector('select');
+        if (isCheckout) {
+            form.querySelector('.address-field-select')?.remove();
+            select = document.createElement('select');
+            select.className = 'saved-address-select address-field-select';
+            select.innerHTML = options;
+            addressTextarea.before(select);
+            addressTextarea.hidden = true;
+            const addressLabel = addressTextarea.closest('label');
+            addressLabel.firstChild.textContent = 'Địa chỉ giao hàng';
+            addressLabel.after(container);
+        }
+        const applyAddress = () => {
+            const item = addresses.find(entry => String(entry.id) === select.value);
+            if (!item) return;
+            form.elements.recipientName.value = item.recipientName;
+            form.elements.recipientPhone.value = item.phone;
+            form.elements.recipientAddress.value = item.address;
+        };
+        select.onchange = applyAddress;
+        applyAddress();
+        container.querySelector('[data-address-add]').onclick = () => {
+            form.elements.recipientPhone.value = '';
+            form.elements.recipientAddress.value = '';
+            if (isCheckout) {
+                select.hidden = true;
+                addressTextarea.hidden = false;
+            }
+            form.elements.recipientAddress.focus();
+            form.querySelector('.save-address-button').textContent = 'LƯU ĐỊA CHỈ MỚI';
+        };
+        container.querySelector('[data-address-default]').onclick = async () => {
+            await changeSavedAddress(`${select.value}/default`, 'PUT');
+            loadSavedAddresses(form, select.value);
+        };
+        container.querySelector('[data-address-delete]').onclick = async () => {
+            if (!window.confirm('Xóa địa chỉ đã chọn khỏi sổ địa chỉ?')) return;
+            await changeSavedAddress(select.value, 'DELETE');
+            loadSavedAddresses(form);
+        };
+    } catch (error) {
+        container.innerHTML = `<p class="address-hint address-error">${escapeHtml(error.message)}</p>`;
+    }
+}
+
+async function changeSavedAddress(path, method) {
+    const response = await fetch(`${API_BASE_URL}/api/user/addresses/${path}`, {
+        method, headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
+    });
+    const data = await readApiJson(response);
+    if (!response.ok) throw new Error(data.message || 'Không thể cập nhật địa chỉ.');
+}
+
+async function saveCheckoutAddress(event) {
+    const form = event.currentTarget.closest('form');
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+        window.alert('Vui lòng đăng nhập để lưu địa chỉ.');
+        closeCartDrawer(); openAuthModal(); return;
+    }
+    if (!form.reportValidity()) return;
+    const button = event.currentTarget;
+    button.disabled = true; button.textContent = 'ĐANG LƯU...';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/user/addresses`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+                label: form.elements.addressLabel.value || 'Địa chỉ mới',
+                recipientName: form.elements.recipientName.value,
+                phone: form.elements.recipientPhone.value,
+                address: form.elements.recipientAddress.value
+            })
+        });
+        const data = await readApiJson(response);
+        if (!response.ok) throw new Error(data.message || 'Không thể lưu địa chỉ.');
+        await loadSavedAddresses(form, data.id);
+    } catch (error) {
+        window.alert(error.message);
+    } finally {
+        button.disabled = false; button.textContent = 'LƯU ĐỊA CHỈ NÀY';
+    }
+}
+
+async function submitCartCheckout(event) {
+    event.preventDefault();
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const token = localStorage.getItem('authToken');
+    if (!token || !user || user.guest) {
+        window.alert('Vui lòng đăng nhập để hoàn tất đơn hàng. Giỏ hàng của bạn đã được lưu.');
+        closeCartDrawer(); openAuthModal(); return;
+    }
+    const cart = getShoppingCart();
+    const button = event.currentTarget.querySelector('.checkout-button');
+    const fields = Object.fromEntries(new FormData(event.currentTarget));
+    button.disabled = true; button.textContent = 'ĐANG ĐẶT HÀNG...';
+    try {
+        const codes = [];
+        for (const item of cart) {
+            const response = await fetch(`${API_BASE_URL}/api/orders`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ ...fields, productVariantId: item.variantId, quantity: item.quantity })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || `Không thể đặt ${item.title}.`);
+            codes.push(result.orderCode);
+            saveShoppingCart(getShoppingCart().filter(entry => String(entry.variantId) !== String(item.variantId)));
+        }
+        window.alert(`Đặt hàng thành công! Mã đơn: ${codes.join(', ')}`);
+        renderShoppingCart();
+    } catch (error) {
+        window.alert(error.message); button.disabled = false; button.textContent = 'THỬ ĐẶT HÀNG LẠI';
+    }
+}
+
+document.addEventListener('click', event => {
+    if (event.target.closest('[data-close-cart]')) closeCartDrawer();
+    const remove = event.target.closest('[data-cart-remove]');
+    const minus = event.target.closest('[data-cart-minus]');
+    const plus = event.target.closest('[data-cart-plus]');
+    const control = remove || minus || plus;
+    if (!control) return;
+    const id = remove?.dataset.cartRemove || minus?.dataset.cartMinus || plus?.dataset.cartPlus;
+    const cart = getShoppingCart();
+    const item = cart.find(entry => String(entry.variantId) === String(id));
+    if (remove) saveShoppingCart(cart.filter(entry => String(entry.variantId) !== String(id)));
+    else if (item) { item.quantity = Math.min(item.stockQty, Math.max(1, item.quantity + (plus ? 1 : -1))); saveShoppingCart(cart); }
+    renderShoppingCart();
+});
 
 document.addEventListener('click', async event => {
     const button = event.target.closest('[data-cancel-order]');
@@ -794,7 +1035,7 @@ document.addEventListener('click', async event => {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || 'Không thể hủy đơn hàng.');
-        await loadCartOrders();
+        renderShoppingCart();
     } catch (error) {
         window.alert(error.message);
         button.disabled = false;
@@ -1065,7 +1306,7 @@ document.addEventListener('click', function(event) {
 document.addEventListener('DOMContentLoaded', () => {
     initAuth();
     ensureCartDrawer();
-    loadCartOrders();
+    renderShoppingCart();
     loadNotifications();
     initShopChat();
     initAiChat();

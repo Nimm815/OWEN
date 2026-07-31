@@ -165,6 +165,105 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+async function ensureUserAddressesTable() {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS UserAddresses (
+      Id INT AUTO_INCREMENT PRIMARY KEY,
+      UserId INT NOT NULL,
+      Label VARCHAR(50) NOT NULL DEFAULT 'Nhà riêng',
+      RecipientName VARCHAR(100) NOT NULL,
+      Phone VARCHAR(30) NOT NULL,
+      Address TEXT NOT NULL,
+      IsDefault TINYINT(1) NOT NULL DEFAULT 0,
+      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UpdatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE ON UPDATE CASCADE,
+      INDEX idx_user_addresses (UserId, IsDefault)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+app.get('/api/user/addresses', authenticateToken, async (req, res) => {
+  try {
+    await ensureUserAddressesTable();
+    const [rows] = await pool.execute(
+      `SELECT Id AS id, Label AS label, RecipientName AS recipientName, Phone AS phone,
+              Address AS address, IsDefault AS isDefault
+       FROM UserAddresses WHERE UserId = ? ORDER BY IsDefault DESC, Id DESC`,
+      [req.user.id]
+    );
+    return res.json({ addresses: rows.map(row => ({ ...row, isDefault: Boolean(row.isDefault) })) });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể tải sổ địa chỉ.' });
+  }
+});
+
+app.post('/api/user/addresses', authenticateToken, async (req, res) => {
+  const { label = 'Nhà riêng', recipientName, phone, address, isDefault = false } = req.body;
+  if (!recipientName?.trim() || !phone?.trim() || !address?.trim()) {
+    return res.status(400).json({ message: 'Vui lòng nhập đủ tên, số điện thoại và địa chỉ.' });
+  }
+  let connection;
+  try {
+    await ensureUserAddressesTable();
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [[count]] = await connection.execute('SELECT COUNT(*) AS total FROM UserAddresses WHERE UserId = ?', [req.user.id]);
+    const makeDefault = Boolean(isDefault) || Number(count.total) === 0;
+    if (makeDefault) await connection.execute('UPDATE UserAddresses SET IsDefault = 0 WHERE UserId = ?', [req.user.id]);
+    const [result] = await connection.execute(
+      'INSERT INTO UserAddresses (UserId, Label, RecipientName, Phone, Address, IsDefault) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.user.id, label.trim().slice(0, 50) || 'Nhà riêng', recipientName.trim(), phone.trim(), address.trim(), makeDefault ? 1 : 0]
+    );
+    await connection.commit();
+    return res.status(201).json({ id: result.insertId, message: 'Đã lưu địa chỉ.' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể lưu địa chỉ.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.put('/api/user/addresses/:id/default', authenticateToken, async (req, res) => {
+  let connection;
+  try {
+    await ensureUserAddressesTable();
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [found] = await connection.execute('SELECT Id FROM UserAddresses WHERE Id = ? AND UserId = ?', [req.params.id, req.user.id]);
+    if (!found.length) { await connection.rollback(); return res.status(404).json({ message: 'Địa chỉ không tồn tại.' }); }
+    await connection.execute('UPDATE UserAddresses SET IsDefault = 0 WHERE UserId = ?', [req.user.id]);
+    await connection.execute('UPDATE UserAddresses SET IsDefault = 1 WHERE Id = ?', [req.params.id]);
+    await connection.commit();
+    return res.json({ message: 'Đã đặt làm địa chỉ mặc định.' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể cập nhật địa chỉ.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.delete('/api/user/addresses/:id', authenticateToken, async (req, res) => {
+  try {
+    await ensureUserAddressesTable();
+    const [result] = await pool.execute('DELETE FROM UserAddresses WHERE Id = ? AND UserId = ?', [req.params.id, req.user.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Địa chỉ không tồn tại.' });
+    const [[remaining]] = await pool.execute('SELECT COUNT(*) AS total FROM UserAddresses WHERE UserId = ? AND IsDefault = 1', [req.user.id]);
+    if (!Number(remaining.total)) {
+      await pool.execute('UPDATE UserAddresses SET IsDefault = 1 WHERE UserId = ? ORDER BY Id DESC LIMIT 1', [req.user.id]);
+    }
+    return res.json({ message: 'Đã xóa địa chỉ.' });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể xóa địa chỉ.' });
+  }
+});
+
 // Admin check middleware
 async function isAdmin(req, res, next) {
   if (!req.user || !req.user.id) return res.sendStatus(401);
