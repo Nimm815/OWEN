@@ -189,6 +189,39 @@ function isValidOrderStatus(value) {
   return ['UNPAID', 'PENDING', 'SHIPPING', 'DELIVERED', 'CANCELLED'].includes(value);
 }
 
+const defaultStoreSettings = {
+  storeName: 'OWEN Việt Nam',
+  storeEmail: '',
+  storePhone: '',
+  storeAddress: '',
+  lowStockThreshold: '5',
+  allowOrderCancellation: 'true',
+  shippingFee: '0',
+  freeShippingThreshold: '0',
+  enableCod: 'true',
+  enableVnpay: 'true',
+  pauseOrders: 'false'
+};
+
+async function ensureStoreSettingsTable() {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS StoreSettings (
+      SettingKey VARCHAR(100) PRIMARY KEY,
+      SettingValue TEXT NOT NULL,
+      UpdatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+async function getStoreSettings() {
+  await ensureStoreSettingsTable();
+  const [rows] = await pool.execute('SELECT SettingKey AS settingKey, SettingValue AS settingValue FROM StoreSettings');
+  return rows.reduce((settings, row) => {
+    settings[row.settingKey] = row.settingValue;
+    return settings;
+  }, { ...defaultStoreSettings });
+}
+
 const aiRateLimits = new Map();
 
 function canUseAiChat(ip) {
@@ -404,6 +437,16 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
   try {
     connection = await pool.getConnection();
     await connection.beginTransaction();
+    const settings = await getStoreSettings();
+    if (settings.pauseOrders === 'true') {
+      await connection.rollback();
+      return res.status(503).json({ message: 'Cửa hàng đang tạm ngừng nhận đơn.' });
+    }
+    if ((paymentMethod === 'COD' && settings.enableCod !== 'true') ||
+        (paymentMethod === 'VNPAY' && settings.enableVnpay !== 'true')) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Phương thức thanh toán này hiện không khả dụng.' });
+    }
     const [variants] = await connection.execute(
       `SELECT v.Id AS id, v.StockQty AS stockQty, COALESCE(v.Price, p.Price) AS unitPrice
        FROM ProductVariants v INNER JOIN Products p ON p.Id = v.ProductId
@@ -420,7 +463,11 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
       return res.status(409).json({ message: `Chỉ còn ${variant.stockQty} sản phẩm trong kho.` });
     }
     const unitPrice = Number(variant.unitPrice);
-    const totalAmount = unitPrice * orderQuantity;
+    const itemTotal = unitPrice * orderQuantity;
+    const shippingFee = Math.max(0, Number(settings.shippingFee) || 0);
+    const freeShippingThreshold = Math.max(0, Number(settings.freeShippingThreshold) || 0);
+    const appliedShippingFee = freeShippingThreshold > 0 && itemTotal >= freeShippingThreshold ? 0 : shippingFee;
+    const totalAmount = itemTotal + appliedShippingFee;
     const orderCode = `OWEN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const [orderResult] = await connection.execute(
       `INSERT INTO Orders (OrderCode, UserId, RecipientName, RecipientPhone, RecipientAddress,
@@ -430,7 +477,7 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
     );
     await connection.execute(
       'INSERT INTO OrderItems (OrderId, ProductVariantId, Quantity, UnitPrice, TotalPrice) VALUES (?, ?, ?, ?, ?)',
-      [orderResult.insertId, productVariantId, orderQuantity, unitPrice, totalAmount]
+      [orderResult.insertId, productVariantId, orderQuantity, unitPrice, itemTotal]
     );
     await connection.execute('UPDATE ProductVariants SET StockQty = StockQty - ? WHERE Id = ?', [orderQuantity, productVariantId]);
     await connection.commit();
@@ -439,6 +486,73 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
     if (connection) await connection.rollback();
     console.error(err);
     return res.status(500).json({ message: 'Không thể tạo đơn hàng.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Customer order history (shown in the storefront cart).
+app.get('/api/orders', authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT o.Id AS id, o.OrderCode AS orderCode, o.Status AS status,
+              o.TotalAmount AS totalAmount, o.PaymentMethod AS paymentMethod,
+              o.CreatedAt AS createdAt, oi.Quantity AS quantity,
+              oi.UnitPrice AS unitPrice, p.Title AS productTitle,
+              p.ImageUrl AS imageUrl, c.Name AS colorName, s.Value AS size
+       FROM Orders o
+       INNER JOIN OrderItems oi ON oi.OrderId = o.Id
+       INNER JOIN ProductVariants v ON v.Id = oi.ProductVariantId
+       INNER JOIN Products p ON p.Id = v.ProductId
+       INNER JOIN Colors c ON c.Id = v.ColorId
+       INNER JOIN Sizes s ON s.Id = v.SizeId
+       WHERE o.UserId = ?
+       ORDER BY o.CreatedAt DESC, oi.Id`,
+      [req.user.id]
+    );
+    return res.json({ orders: rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải giỏ hàng.' });
+  }
+});
+
+app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [orders] = await connection.execute(
+      'SELECT Status AS status FROM Orders WHERE Id = ? AND UserId = ? FOR UPDATE',
+      [req.params.id, req.user.id]
+    );
+    if (!orders.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Không tìm thấy đơn hàng.' });
+    }
+    const settings = await getStoreSettings();
+    if (settings.allowOrderCancellation !== 'true') {
+      await connection.rollback();
+      return res.status(403).json({ message: 'Cửa hàng hiện không cho phép khách hàng tự hủy đơn.' });
+    }
+    if (!['UNPAID', 'PENDING'].includes(orders[0].status)) {
+      await connection.rollback();
+      return res.status(409).json({ message: 'Đơn hàng đã được xử lý nên không thể hủy.' });
+    }
+    await connection.execute(
+      `UPDATE ProductVariants v
+       INNER JOIN OrderItems oi ON oi.ProductVariantId = v.Id
+       SET v.StockQty = v.StockQty + oi.Quantity
+       WHERE oi.OrderId = ?`,
+      [req.params.id]
+    );
+    await connection.execute("UPDATE Orders SET Status = 'CANCELLED' WHERE Id = ?", [req.params.id]);
+    await connection.commit();
+    return res.json({ id: Number(req.params.id), status: 'CANCELLED' });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể hủy đơn hàng.' });
   } finally {
     if (connection) connection.release();
   }
@@ -800,12 +914,94 @@ app.delete('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res)
   return res.status(405).json({ message: 'Đơn hàng là lịch sử giao dịch và không thể xóa. Hãy hủy đơn nếu cần.' });
 });
 
-// Admin stats (basic)
+app.get('/api/admin/settings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    return res.json({ settings: await getStoreSettings() });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể tải cài đặt cửa hàng.' });
+  }
+});
+
+app.put('/api/admin/settings', authenticateToken, isAdmin, async (req, res) => {
+  const allowedKeys = Object.keys(defaultStoreSettings);
+  const entries = Object.entries(req.body || {}).filter(([key]) => allowedKeys.includes(key));
+  const threshold = Number(req.body.lowStockThreshold);
+  const shippingFee = Number(req.body.shippingFee);
+  const freeShippingThreshold = Number(req.body.freeShippingThreshold);
+  if (!entries.length || !Number.isInteger(threshold) || threshold < 0 ||
+      !Number.isFinite(shippingFee) || shippingFee < 0 ||
+      !Number.isFinite(freeShippingThreshold) || freeShippingThreshold < 0 ||
+      (!req.body.enableCod && !req.body.enableVnpay)) {
+    return res.status(400).json({ message: 'Thông tin cài đặt không hợp lệ.' });
+  }
+  try {
+    await ensureStoreSettingsTable();
+    for (const [key, value] of entries) {
+      await pool.execute(
+        `INSERT INTO StoreSettings (SettingKey, SettingValue) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE SettingValue = VALUES(SettingValue)`,
+        [key, String(value)]
+      );
+    }
+    return res.json({ settings: await getStoreSettings() });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể lưu cài đặt cửa hàng.' });
+  }
+});
+
+app.put('/api/admin/account/password', authenticateToken, isAdmin, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword || newPassword.length < 6) {
+    return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+  }
+  try {
+    const [rows] = await pool.execute('SELECT PasswordHash AS passwordHash FROM Users WHERE Id = ?', [req.user.id]);
+    if (!rows.length || !(await bcrypt.compare(currentPassword, rows[0].passwordHash))) {
+      return res.status(400).json({ message: 'Mật khẩu hiện tại không chính xác.' });
+    }
+    await pool.execute('UPDATE Users SET PasswordHash = ? WHERE Id = ?', [await bcrypt.hash(newPassword, 10), req.user.id]);
+    return res.json({ message: 'Đổi mật khẩu thành công.' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Không thể đổi mật khẩu.' });
+  }
+});
+
+// Admin dashboard statistics
 app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const [[{ cnt: totalProducts }]] = await pool.query('SELECT COUNT(*) as cnt FROM Products');
-    const [[{ cnt: totalUsers }]] = await pool.query('SELECT COUNT(*) as cnt FROM Users');
-    return res.json({ totalProducts, totalUsers });
+    const settings = await getStoreSettings();
+    const lowStockThreshold = Math.max(0, Number(settings.lowStockThreshold) || 5);
+    const [
+      [[productStats]], [[userStats]], [[orderStats]], [recentOrders], [lowStockProducts]
+    ] = await Promise.all([
+      pool.query('SELECT COUNT(*) AS totalProducts FROM Products'),
+      pool.query('SELECT COUNT(*) AS totalUsers FROM Users'),
+      pool.query(`SELECT COUNT(*) AS totalOrders,
+                         SUM(Status IN ('UNPAID','PENDING')) AS pendingOrders,
+                         SUM(Status = 'SHIPPING') AS shippingOrders,
+                         SUM(Status = 'DELIVERED') AS deliveredOrders,
+                         SUM(Status = 'CANCELLED') AS cancelledOrders,
+                         COALESCE(SUM(CASE WHEN Status = 'DELIVERED' THEN TotalAmount ELSE 0 END), 0) AS revenue
+                  FROM Orders`),
+      pool.query(`SELECT Id AS id, OrderCode AS orderCode, RecipientName AS recipientName,
+                         Status AS status, TotalAmount AS totalAmount, CreatedAt AS createdAt
+                  FROM Orders ORDER BY CreatedAt DESC LIMIT 6`),
+      pool.execute(`SELECT p.Title AS productTitle, c.Name AS colorName,
+                           s.Value AS size, v.StockQty AS stockQty
+                    FROM ProductVariants v
+                    INNER JOIN Products p ON p.Id = v.ProductId
+                    INNER JOIN Colors c ON c.Id = v.ColorId
+                    INNER JOIN Sizes s ON s.Id = v.SizeId
+                    WHERE p.IsActive = 1 AND v.StockQty <= ?
+                    ORDER BY v.StockQty ASC, p.Title ASC LIMIT 8`, [lowStockThreshold])
+    ]);
+    return res.json({
+      ...productStats, ...userStats, ...orderStats,
+      lowStockThreshold, recentOrders, lowStockProducts
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Lỗi khi lấy thống kê.' });

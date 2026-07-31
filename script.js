@@ -256,6 +256,8 @@ async function openPurchaseModal(productId) {
                 if (!response.ok) throw new Error(result.message || 'Không thể đặt hàng.');
                 window.alert(`Đặt hàng thành công!\nMã đơn: ${result.orderCode}\nĐơn hàng đang chờ cửa hàng xác nhận.`);
                 closePurchaseModal();
+                await loadCartOrders();
+                openCartDrawer();
             } catch (error) {
                 window.alert(error.message);
                 button.disabled = false;
@@ -481,14 +483,202 @@ function updateAuthUI() {
     
     if (currentUser) {
         authBtn.style.display = 'none';
-        authSection.style.display = 'block';
+        authSection.style.display = 'none';
         document.getElementById('userNameDisplay').textContent = currentUser.name;
         document.getElementById('userEmailDisplay').textContent = currentUser.email;
     } else {
-        authBtn.style.display = 'block';
+        authBtn.style.display = 'none';
         authSection.style.display = 'none';
     }
+    updateCartButton();
+    updateAccountButton();
 }
+
+// ================= CART / CUSTOMER ORDERS =================
+
+const orderStatusLabels = {
+    UNPAID: 'Chưa thanh toán',
+    PENDING: 'Chờ xác nhận',
+    SHIPPING: 'Đang giao',
+    DELIVERED: 'Đã giao',
+    CANCELLED: 'Đã hủy'
+};
+
+function ensureCartDrawer() {
+    if (document.getElementById('cartDrawer')) return;
+    const headerElement = document.querySelector('header');
+    const authSection = document.getElementById('authSection');
+    const authButton = document.getElementById('authBtn');
+    const menuButton = headerElement?.querySelector('.menu-btn');
+    const headerActions = document.createElement('div');
+    headerActions.className = 'header-actions';
+    const cartButton = document.createElement('button');
+    cartButton.id = 'cartButton';
+    cartButton.className = 'cart-button';
+    cartButton.type = 'button';
+    cartButton.setAttribute('aria-label', 'Mở giỏ hàng');
+    cartButton.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 4h2l2.1 10.1a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L20 8H6M10 20a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm8 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/>
+      </svg>
+      <span id="cartCount">0</span>`;
+    cartButton.onclick = openCartDrawer;
+    if (headerElement) {
+        headerElement.appendChild(headerActions);
+        headerActions.appendChild(cartButton);
+        headerActions.insertAdjacentHTML('beforeend', `
+          <div class="account-menu-wrap">
+            <button id="accountButton" class="account-button" type="button" aria-label="Tài khoản" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="8" r="4"></circle>
+                <path d="M4.5 21a7.5 7.5 0 0 1 15 0"></path>
+              </svg>
+            </button>
+            <div id="accountDropdown" class="account-dropdown" hidden></div>
+          </div>`);
+        if (authSection) headerActions.appendChild(authSection);
+        if (authButton) headerActions.appendChild(authButton);
+        if (menuButton) headerActions.appendChild(menuButton);
+    }
+    document.getElementById('accountButton').onclick = toggleAccountMenu;
+
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="cartBackdrop" class="cart-backdrop" aria-hidden="true"></div>
+      <aside id="cartDrawer" class="cart-drawer" aria-hidden="true" aria-labelledby="cartTitle">
+        <div class="cart-heading">
+          <div><p>OWEN</p><h2 id="cartTitle">Giỏ hàng của bạn</h2></div>
+          <button id="cartClose" type="button" aria-label="Đóng">&times;</button>
+        </div>
+        <div id="cartContent" class="cart-content"></div>
+      </aside>`);
+    document.getElementById('cartClose').onclick = closeCartDrawer;
+    document.getElementById('cartBackdrop').onclick = closeCartDrawer;
+}
+
+function updateAccountButton() {
+    const button = document.getElementById('accountButton');
+    const dropdown = document.getElementById('accountDropdown');
+    if (!button || !dropdown) return;
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const isSignedIn = user && !user.guest && localStorage.getItem('authToken');
+    button.classList.toggle('signed-in', Boolean(isSignedIn));
+    button.setAttribute('aria-label', isSignedIn ? 'Mở menu tài khoản' : 'Đăng nhập');
+    dropdown.innerHTML = isSignedIn ? `
+      <div class="account-summary">
+        <strong>${escapeHtml(user.name)}</strong>
+        <span>${escapeHtml(user.email)}</span>
+      </div>
+      <button class="account-logout" type="button">ĐĂNG XUẤT</button>` : '';
+    dropdown.querySelector('.account-logout')?.addEventListener('click', handleLogout);
+}
+
+function toggleAccountMenu(event) {
+    event?.stopPropagation();
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const isSignedIn = user && !user.guest && localStorage.getItem('authToken');
+    if (!isSignedIn) {
+        document.getElementById('accountDropdown').hidden = true;
+        openAuthModal();
+        return;
+    }
+    const dropdown = document.getElementById('accountDropdown');
+    const willOpen = dropdown.hidden;
+    dropdown.hidden = !willOpen;
+    document.getElementById('accountButton').setAttribute('aria-expanded', String(willOpen));
+}
+
+function updateCartButton(count) {
+    ensureCartDrawer();
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const button = document.getElementById('cartButton');
+    if (button) button.hidden = !currentUser || currentUser.guest;
+    if (Number.isInteger(count)) document.getElementById('cartCount').textContent = count;
+}
+
+function openCartDrawer() {
+    ensureCartDrawer();
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    if (!currentUser || currentUser.guest || !localStorage.getItem('authToken')) {
+        openAuthModal();
+        return;
+    }
+    document.getElementById('cartDrawer').classList.add('open');
+    document.getElementById('cartBackdrop').classList.add('open');
+    document.getElementById('cartDrawer').setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    loadCartOrders();
+}
+
+function closeCartDrawer() {
+    document.getElementById('cartDrawer')?.classList.remove('open');
+    document.getElementById('cartBackdrop')?.classList.remove('open');
+    document.getElementById('cartDrawer')?.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+}
+
+async function loadCartOrders() {
+    ensureCartDrawer();
+    const token = localStorage.getItem('authToken');
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    if (!token || !user || user.guest) {
+        updateCartButton(0);
+        return;
+    }
+    const content = document.getElementById('cartContent');
+    content.innerHTML = '<p class="cart-message">Đang tải đơn hàng...</p>';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/orders`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể tải giỏ hàng.');
+        const orders = data.orders || [];
+        updateCartButton(orders.filter(order => order.status !== 'CANCELLED').length);
+        if (!orders.length) {
+            content.innerHTML = '<p class="cart-message">Bạn chưa đặt sản phẩm nào.</p>';
+            return;
+        }
+        content.innerHTML = orders.map(order => `
+          <article class="cart-order">
+            <img src="${escapeHtml(productImageUrl(order.imageUrl))}" alt="${escapeHtml(order.productTitle)}">
+            <div class="cart-order-info">
+              <div class="cart-order-top">
+                <span>${escapeHtml(order.orderCode)}</span>
+                <strong class="status-${String(order.status).toLowerCase()}">${orderStatusLabels[order.status] || escapeHtml(order.status)}</strong>
+              </div>
+              <h3>${escapeHtml(order.productTitle)}</h3>
+              <p>Màu ${escapeHtml(order.colorName)} · Size ${escapeHtml(order.size)} · SL ${order.quantity}</p>
+              <div class="cart-order-bottom">
+                <b>${formatPrice(order.totalAmount)}</b>
+                ${['UNPAID', 'PENDING'].includes(order.status) ? `<button type="button" data-cancel-order="${order.id}">HỦY ĐƠN</button>` : ''}
+              </div>
+            </div>
+          </article>`).join('');
+    } catch (error) {
+        content.innerHTML = `<p class="cart-message cart-error">${escapeHtml(error.message)}</p>`;
+    }
+}
+
+document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-cancel-order]');
+    if (!button) return;
+    if (!window.confirm('Bạn có chắc muốn hủy đơn hàng vừa đặt?')) return;
+    button.disabled = true;
+    button.textContent = 'ĐANG HỦY...';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/orders/${button.dataset.cancelOrder}/cancel`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Không thể hủy đơn hàng.');
+        await loadCartOrders();
+    } catch (error) {
+        window.alert(error.message);
+        button.disabled = false;
+        button.textContent = 'HỦY ĐƠN';
+    }
+});
 
 // Show error message
 function showError(errorDiv, message) {
@@ -608,6 +798,13 @@ function initAiChat() {
 
 // Close modal when clicking outside
 document.addEventListener('click', function(event) {
+    const accountWrap = event.target.closest('.account-menu-wrap');
+    if (!accountWrap) {
+        const dropdown = document.getElementById('accountDropdown');
+        const button = document.getElementById('accountButton');
+        if (dropdown) dropdown.hidden = true;
+        if (button) button.setAttribute('aria-expanded', 'false');
+    }
     const authModal = document.getElementById('authModal');
     const authContainer = document.querySelector('.auth-container');
     
@@ -623,6 +820,8 @@ document.addEventListener('click', function(event) {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     initAuth();
+    ensureCartDrawer();
+    loadCartOrders();
     initAiChat();
     loadHomepageProducts();
     loadCategoryProducts();

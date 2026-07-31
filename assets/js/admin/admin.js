@@ -30,6 +30,10 @@ function formatDate(value) {
   return value ? new Date(value).toLocaleString('vi-VN') : '-';
 }
 
+function formatCurrency(value) {
+  return `${Number(value || 0).toLocaleString('vi-VN')} đ`;
+}
+
 function actionButton(label, className, action, id) {
   return `<button class="btn btn-small ${className}" data-action="${action}" data-id="${id}">${label}</button>`;
 }
@@ -67,19 +71,174 @@ async function loadPage(page) {
   try {
     if (page === 'dashboard') {
       const stats = await request('/api/admin/stats');
-      document.getElementById('totalProducts').textContent = stats.totalProducts;
-      document.getElementById('totalUsers').textContent = stats.totalUsers;
-      pageArea.innerHTML = '<p>Use the menu to manage products, orders and users.</p>';
+      renderDashboard(stats);
     } else if (page === 'products') renderProducts((await request('/api/admin/products')).products || []);
     else if (['colors', 'sizes', 'categories'].includes(page)) renderCatalogPage(page, (await request(`/api/admin/${page}`))[page] || []);
     else if (page === 'variants') renderVariants((await request('/api/admin/variants')).variants || []);
     else if (page === 'orders') renderOrders((await request('/api/admin/orders')).orders || []);
     else if (page === 'users') renderUsers((await request('/api/admin/users')).users || []);
+    else if (page === 'settings') {
+      const [settingsData, accountData] = await Promise.all([
+        request('/api/admin/settings'),
+        request('/api/auth/me')
+      ]);
+      renderSettings(settingsData.settings || {}, accountData.user || {});
+    }
     else pageArea.innerHTML = '<p>This page is not available yet.</p>';
   } catch (error) {
     if (/401|403/.test(error.message)) return renderLogin('Please log in with an admin account.');
     pageArea.innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function renderDashboard(stats) {
+  const statusLabels = {
+    UNPAID: 'Chưa thanh toán', PENDING: 'Chờ xác nhận', SHIPPING: 'Đang giao',
+    DELIVERED: 'Đã hoàn thành', CANCELLED: 'Đã hủy'
+  };
+  const cards = [
+    ['Sản phẩm', stats.totalProducts, 'products'],
+    ['Người dùng', stats.totalUsers, 'users'],
+    ['Tổng đơn hàng', stats.totalOrders, 'orders'],
+    ['Doanh thu', formatCurrency(stats.revenue), 'revenue'],
+    ['Chờ xác nhận', stats.pendingOrders || 0, 'pending'],
+    ['Đang giao', stats.shippingOrders || 0, 'shipping'],
+    ['Đã hoàn thành', stats.deliveredOrders || 0, 'delivered'],
+    ['Đã hủy', stats.cancelledOrders || 0, 'cancelled']
+  ];
+  const recent = stats.recentOrders || [];
+  const lowStock = stats.lowStockProducts || [];
+  pageArea.innerHTML = `
+    <div class="dashboard-heading">
+      <div><p>TỔNG QUAN CỬA HÀNG</p><h2>Xin chào, quản trị viên</h2></div>
+      <span>Cập nhật ${new Date().toLocaleString('vi-VN')}</span>
+    </div>
+    <div class="dashboard-metrics">
+      ${cards.map(([label, value, type]) => `
+        <article class="metric-card metric-${type}">
+          <span>${label}</span><strong>${value ?? 0}</strong>
+        </article>`).join('')}
+    </div>
+    <div class="dashboard-grid">
+      <section class="dashboard-panel">
+        <div class="panel-heading"><h3>Đơn hàng gần đây</h3><button data-go-page="orders">Xem tất cả</button></div>
+        ${recent.length ? `<div class="table-responsive"><table>
+          <thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>Trạng thái</th><th>Tổng tiền</th></tr></thead>
+          <tbody>${recent.map(order => `<tr>
+            <td>${escapeHtml(order.orderCode)}</td>
+            <td>${escapeHtml(order.recipientName)}</td>
+            <td><span class="order-status status-${order.status.toLowerCase()}">${statusLabels[order.status] || order.status}</span></td>
+            <td>${formatCurrency(order.totalAmount)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>` : '<div class="no-data">Chưa có đơn hàng.</div>'}
+      </section>
+      <section class="dashboard-panel">
+        <div class="panel-heading"><h3>Sản phẩm sắp hết</h3><span>Ngưỡng ≤ ${stats.lowStockThreshold}</span></div>
+        ${lowStock.length ? `<div class="low-stock-list">${lowStock.map(item => `
+          <div class="low-stock-item">
+            <div><strong>${escapeHtml(item.productTitle)}</strong><span>${escapeHtml(item.colorName)} · ${escapeHtml(item.size)}</span></div>
+            <b class="${Number(item.stockQty) === 0 ? 'empty' : ''}">${item.stockQty}</b>
+          </div>`).join('')}</div>` : '<div class="no-data">Không có sản phẩm sắp hết.</div>'}
+      </section>
+    </div>`;
+  pageArea.querySelector('[data-go-page="orders"]')?.addEventListener('click', () => selectPage('orders'));
+}
+
+function renderSettings(settings, account) {
+  pageArea.innerHTML = `
+    <div class="settings-heading">
+      <div><p>CẤU HÌNH HỆ THỐNG</p><h2>Cài đặt cửa hàng</h2></div>
+      <span>Các thay đổi được lưu trong cơ sở dữ liệu.</span>
+    </div>
+    <div class="settings-grid">
+      <form id="storeSettingsForm" class="settings-card">
+        <div class="settings-card-heading"><h3>Thông tin cửa hàng</h3><p>Thông tin liên hệ chính của OWEN.</p></div>
+        <label>Tên cửa hàng<input name="storeName" value="${escapeHtml(settings.storeName)}" required></label>
+        <label>Email<input name="storeEmail" type="email" value="${escapeHtml(settings.storeEmail)}"></label>
+        <label>Số điện thoại<input name="storePhone" value="${escapeHtml(settings.storePhone)}"></label>
+        <label>Địa chỉ<textarea name="storeAddress">${escapeHtml(settings.storeAddress)}</textarea></label>
+        <div class="settings-card-heading section-gap"><h3>Cài đặt đơn hàng</h3><p>Điều khiển tồn kho và quyền hủy đơn.</p></div>
+        <div class="settings-row">
+          <label>Ngưỡng cảnh báo tồn kho<input name="lowStockThreshold" type="number" min="0" value="${escapeHtml(settings.lowStockThreshold)}" required></label>
+          <label>Phí giao hàng mặc định<input name="shippingFee" type="number" min="0" value="${escapeHtml(settings.shippingFee)}" required></label>
+        </div>
+        <label>Miễn phí vận chuyển từ<input name="freeShippingThreshold" type="number" min="0" value="${escapeHtml(settings.freeShippingThreshold || 0)}" required><small>Nhập 0 nếu không áp dụng.</small></label>
+        <div class="payment-switches">
+          <label class="setting-switch">
+            <input name="enableCod" type="checkbox" ${settings.enableCod !== 'false' ? 'checked' : ''}>
+            <span><strong>Thanh toán COD</strong><small>Thanh toán khi nhận hàng.</small></span>
+          </label>
+          <label class="setting-switch">
+            <input name="enableVnpay" type="checkbox" ${settings.enableVnpay !== 'false' ? 'checked' : ''}>
+            <span><strong>Thanh toán VNPay</strong><small>Thanh toán trực tuyến.</small></span>
+          </label>
+        </div>
+        <label class="setting-switch">
+          <input name="allowOrderCancellation" type="checkbox" ${settings.allowOrderCancellation === 'true' ? 'checked' : ''}>
+          <span><strong>Cho phép khách tự hủy đơn</strong><small>Chỉ áp dụng khi đơn chưa được xử lý.</small></span>
+        </label>
+        <label class="setting-switch setting-warning">
+          <input name="pauseOrders" type="checkbox" ${settings.pauseOrders === 'true' ? 'checked' : ''}>
+          <span><strong>Tạm ngừng nhận đơn</strong><small>Khách vẫn xem được sản phẩm nhưng không thể đặt hàng.</small></span>
+        </label>
+        <p class="settings-message" aria-live="polite"></p>
+        <button class="btn btn-primary" type="submit">Lưu cài đặt</button>
+      </form>
+      <form id="passwordForm" class="settings-card settings-account">
+        <div class="settings-card-heading"><h3>Tài khoản quản trị</h3><p>Đổi mật khẩu cho tài khoản đang đăng nhập.</p></div>
+        <div class="admin-identity"><span>${escapeHtml((account.name || 'A').charAt(0).toUpperCase())}</span><div><strong>${escapeHtml(account.name)}</strong><small>${escapeHtml(account.email)}</small></div></div>
+        <label>Mật khẩu hiện tại<input name="currentPassword" type="password" required autocomplete="current-password"></label>
+        <label>Mật khẩu mới<input name="newPassword" type="password" minlength="6" required autocomplete="new-password"></label>
+        <label>Xác nhận mật khẩu mới<input name="confirmPassword" type="password" minlength="6" required autocomplete="new-password"></label>
+        <p class="settings-message" aria-live="polite"></p>
+        <button class="btn" type="submit">Đổi mật khẩu</button>
+      </form>
+    </div>`;
+
+  document.getElementById('storeSettingsForm').onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const message = form.querySelector('.settings-message');
+    const values = Object.fromEntries(new FormData(form));
+    values.allowOrderCancellation = form.elements.allowOrderCancellation.checked;
+    values.enableCod = form.elements.enableCod.checked;
+    values.enableVnpay = form.elements.enableVnpay.checked;
+    values.pauseOrders = form.elements.pauseOrders.checked;
+    try {
+      await request('/api/admin/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values)
+      });
+      message.className = 'settings-message success';
+      message.textContent = 'Đã lưu cài đặt thành công.';
+    } catch (error) {
+      message.className = 'settings-message error';
+      message.textContent = error.message;
+    }
+  };
+
+  document.getElementById('passwordForm').onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const message = form.querySelector('.settings-message');
+    const values = Object.fromEntries(new FormData(form));
+    if (values.newPassword !== values.confirmPassword) {
+      message.className = 'settings-message error';
+      message.textContent = 'Mật khẩu xác nhận không khớp.';
+      return;
+    }
+    try {
+      const result = await request('/api/admin/account/password', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: values.currentPassword, newPassword: values.newPassword })
+      });
+      form.reset();
+      message.className = 'settings-message success';
+      message.textContent = result.message;
+    } catch (error) {
+      message.className = 'settings-message error';
+      message.textContent = error.message;
+    }
+  };
 }
 
 function renderCatalogPage(resource, rows) {
@@ -206,7 +365,12 @@ function renderLogin(message = '') {
   document.getElementById('adminLoginBtn').onclick = async () => { try { const data = await fetch(`${API_BASE_URL}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: document.getElementById('adminEmail').value.trim(), password: document.getElementById('adminPassword').value }) }).then(r => r.json()); if (!data.token || !['ADMIN', 'ROLE_ADMIN'].includes(data.user?.role)) throw new Error(data.message || 'Admin account required.'); localStorage.setItem('authToken', data.token); loadPage('dashboard'); } catch (error) { renderLogin(error.message); } };
 }
 
-document.querySelectorAll('.sidebar nav li').forEach(li => li.onclick = () => { document.querySelectorAll('.sidebar nav li').forEach(x => x.classList.remove('active')); li.classList.add('active'); loadPage(li.dataset.page); });
+function selectPage(page) {
+  document.querySelectorAll('.sidebar nav li').forEach(item => item.classList.toggle('active', item.dataset.page === page));
+  loadPage(page);
+}
+
+document.querySelectorAll('.sidebar nav li').forEach(li => li.onclick = () => selectPage(li.dataset.page));
 document.getElementById('toggleSidebar').onclick = () => sidebar.classList.toggle('open');
 document.getElementById('logoutBtn').onclick = () => {
   localStorage.removeItem('authToken');
