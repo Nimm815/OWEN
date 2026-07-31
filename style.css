@@ -1393,8 +1393,8 @@ header:not(.scrolled) .cart-button span{background:#fff;color:#111}
 .account-summary{display:flex;flex-direction:column;gap:5px;padding:12px 11px 15px;border-bottom:1px solid #eee}
 .account-summary strong{font-size:14px;font-weight:600}
 .account-summary span{overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#777}
-.account-logout,.account-addresses{width:100%;margin-top:7px;padding:12px 10px;border:0;background:transparent;text-align:left;font-size:10px;letter-spacing:1.5px;cursor:pointer}
-.account-logout:hover,.account-addresses:hover{background:#f3f3f3}
+.account-logout,.account-addresses,.account-rewards{width:100%;margin-top:7px;padding:12px 10px;border:0;background:transparent;text-align:left;font-size:10px;letter-spacing:1.5px;cursor:pointer}
+.account-logout:hover,.account-addresses:hover,.account-rewards:hover{background:#f3f3f3}
 .notification-menu-wrap{position:relative;display:flex;align-items:center}
 .notification-menu-wrap[hidden]{display:none}
 .notification-button{position:relative;display:grid;place-items:center;width:38px;height:38px;border:0;background:transparent;color:inherit;padding:5px;cursor:pointer}
@@ -1424,7 +1424,12 @@ header:not(.scrolled) .cart-button span{background:#fff;color:#111}
 .cart-heading h2{margin:0;font-size:25px;font-weight:400}
 .cart-heading button{border:0;background:transparent;font-size:32px;cursor:pointer}
 .cart-content{padding:20px;overflow-y:auto}
-.shopping-cart-item{position:relative;display:grid;grid-template-columns:110px 1fr;gap:16px;padding:14px;background:#fff;border-bottom:1px solid #e7e4df}
+.cart-selection-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;background:#fff;border-bottom:1px solid #e7e4df;font-size:11px}
+.cart-selection-bar label{display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer}.cart-selection-bar span{color:#777}
+.cart-selection-bar input,.cart-item-check input{width:17px;height:17px;accent-color:#111;cursor:pointer}
+.shopping-cart-item{position:relative;display:grid;grid-template-columns:110px 1fr;gap:16px;padding:14px 14px 14px 42px;background:#fff;border-bottom:1px solid #e7e4df;transition:opacity .2s}
+.shopping-cart-item.cart-item-unselected{opacity:.48}
+.cart-item-check{position:absolute;left:14px;top:50%;display:grid;place-items:center;transform:translateY(-50%)}
 .shopping-cart-item img{width:110px;height:138px;object-fit:cover;border-radius:2px}
 .shopping-cart-item h3{margin:12px 28px 7px 0;font-size:16px;font-weight:500}.shopping-cart-item p{margin:0;color:#777;font-size:12px}
 .cart-remove{position:absolute;right:13px;top:10px;border:0;background:transparent;font-size:22px;color:#777;cursor:pointer}
@@ -1438,6 +1443,7 @@ header:not(.scrolled) .cart-button span{background:#fff;color:#111}
 .checkout-form input,.checkout-form select,.checkout-form textarea{width:100%;padding:12px;border:1px solid #ccc;background:#fff;font:inherit}.checkout-form textarea{min-height:64px;resize:vertical}
 .checkout-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .checkout-button,.cart-empty button{border:1px solid #111;background:#111;color:#fff;padding:16px;letter-spacing:1px;font-weight:600;cursor:pointer}.checkout-button:disabled{opacity:.55}
+.reward-checkout-button{border:1px solid #111;background:#fff;color:#111;padding:15px;letter-spacing:1px;font-weight:700;cursor:pointer}.reward-checkout-button:disabled{opacity:.45;cursor:not-allowed}
 .checkout-note{text-align:center;color:#888;font-size:10px;margin:0}.cart-empty{text-align:center;padding:60px 20px;background:#fff}.cart-empty span{display:grid;place-items:center;margin:auto;width:52px;height:52px;border:1px solid #bbb;border-radius:50%;font-size:18px}.cart-empty h3{font-weight:500}.cart-empty p{color:#777}.cart-empty button{margin-top:12px}
 .order-history{margin-top:24px}.order-history>h3{font-size:13px;letter-spacing:1px;text-transform:uppercase}
 .saved-addresses{padding:14px;background:#f5f4f1;border:1px solid #e2dfd8}
@@ -1451,6 +1457,27 @@ header:not(.scrolled) .cart-button span{background:#fff;color:#111}
 .save-address-button{border:1px solid #111;background:#fff;color:#111;padding:0 13px;font-size:9px;letter-spacing:1px;cursor:pointer}.save-address-button:disabled{opacity:.5}
 .checkout-save-address{padding:12px;background:#fff}
 .address-manager-intro{padding:28px 24px;background:#191919;color:#fff}.address-manager-intro>p:first-child{margin:0 0 12px;color:#aaa;font-size:10px;letter-spacing:2px}.address-manager-intro h3{margin:0 0 5px;font-size:24px;font-weight:400}.address-manager-intro span{color:#aaa;font-size:12px}.address-manager-intro>p:last-child{margin:22px 0 0;line-height:1.6;color:#ccc;font-size:12px}.address-manager-form .save-address-button{padding:15px;background:#111;color:#fff}
+.reward-account{display:flex;flex-direction:column;gap:22px;padding-bottom:28px}
+.reward-balance{padding:38px 24px;text-align:center;background:#191919;color:#fff}
+.reward-balance span{display:block;color:#aaa;font-size:10px;letter-spacing:2px}
+.reward-balance strong{display:block;margin-top:12px;font-size:58px;font-weight:300;line-height:1}
+.reward-balance p{margin:7px 0 0;color:#ccc;font-size:12px}
+.reward-rule,.reward-history{margin:0 20px}
+.reward-rule{padding:18px;background:#f5f4f1;border:1px solid #e2dfd8}
+.reward-rule strong,.reward-history>h3{font-size:12px;letter-spacing:1px;text-transform:uppercase}
+.reward-rule p{margin:8px 0 0;color:#666;font-size:12px;line-height:1.6}
+.reward-history>h3{margin:0 0 10px}
+.reward-transaction{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 0;border-bottom:1px solid #e8e8e8}
+.reward-transaction>div{display:flex;min-width:0;flex-direction:column;gap:4px}
+.reward-transaction strong{font-size:12px}.reward-transaction span,.reward-transaction time{color:#777;font-size:10px}
+.reward-transaction b{font-size:18px}.reward-plus{color:#278245}.reward-minus{color:#a22}
+.reward-empty{padding:18px 0;color:#777;font-size:12px}
+.reward-confirm-modal{position:fixed;inset:0;z-index:1700;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.58)}
+.reward-confirm-dialog{width:min(440px,100%);padding:30px;background:#fff;box-shadow:0 22px 65px rgba(0,0,0,.3)}
+.reward-confirm-kicker{font-size:10px;letter-spacing:2px;color:#777}.reward-confirm-dialog h3{margin:10px 0 22px;font-size:23px;font-weight:500;line-height:1.35}
+.reward-confirm-value{display:flex;align-items:center;justify-content:center;gap:12px;padding:20px;background:#191919;color:#fff}.reward-confirm-value strong{font-size:20px}.reward-confirm-value span{color:#888}
+.reward-confirm-dialog>p{margin:13px 0 0;color:#555;font-size:12px;line-height:1.5}.reward-confirm-dialog>p b{color:#111}
+.reward-confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:25px}.reward-confirm-actions button{padding:14px;border:1px solid #111;background:#fff;font-weight:700;letter-spacing:1px;cursor:pointer}.reward-confirm-actions button:last-child{background:#111;color:#fff}
 .cart-message{text-align:center;padding:55px 10px;color:#666}
 .cart-error{color:#9c1c1c}
 .cart-order{display:grid;grid-template-columns:112px 1fr;gap:17px;margin-bottom:15px;padding:14px;background:#fff;border:1px solid #e5e5e5}

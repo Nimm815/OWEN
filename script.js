@@ -679,8 +679,13 @@ function updateAccountButton() {
         <strong>${escapeHtml(user.name)}</strong>
         <span>${escapeHtml(user.email)}</span>
       </div>
+      <button class="account-rewards" type="button">ĐIỂM THƯỞNG</button>
       <button class="account-addresses" type="button">THÔNG TIN & ĐỊA CHỈ</button>
       <button class="account-logout" type="button">ĐĂNG XUẤT</button>` : '';
+    dropdown.querySelector('.account-rewards')?.addEventListener('click', () => {
+        dropdown.hidden = true;
+        openRewardManager();
+    });
     dropdown.querySelector('.account-addresses')?.addEventListener('click', () => {
         dropdown.hidden = true;
         openAddressManager();
@@ -712,7 +717,10 @@ function updateCartButton(count) {
 
 const CART_STORAGE_KEY = 'owenShoppingCart';
 function getShoppingCart() {
-    try { return JSON.parse(localStorage.getItem(CART_STORAGE_KEY) || '[]'); } catch { return []; }
+    try {
+        return JSON.parse(localStorage.getItem(CART_STORAGE_KEY) || '[]')
+            .map(item => ({ ...item, selected: item.selected !== false }));
+    } catch { return []; }
 }
 function saveShoppingCart(cart) {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
@@ -761,6 +769,63 @@ function openAddressManager() {
     loadSavedAddresses(form);
 }
 
+function rewardTransactionLabel(type) {
+    const labels = {
+        ORDER_EARNED: 'Điểm từ đơn hàng',
+        REWARD_REDEEMED: 'Đổi quà',
+        ORDER_REVERSED: 'Hoàn điểm đơn hàng',
+        ADMIN_ADJUSTED: 'Điều chỉnh bởi quản trị viên'
+    };
+    return labels[type] || type;
+}
+
+async function openRewardManager() {
+    ensureCartDrawer();
+    document.getElementById('cartTitle').textContent = 'Điểm thưởng';
+    document.getElementById('cartDrawer').classList.add('open');
+    document.getElementById('cartBackdrop').classList.add('open');
+    document.getElementById('cartDrawer').setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    const content = document.getElementById('cartContent');
+    content.innerHTML = '<p class="cart-message">Đang tải điểm thưởng...</p>';
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/user/rewards`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
+        });
+        const data = await readApiJson(response);
+        if (!response.ok) throw new Error(data.message || 'Không thể tải điểm thưởng.');
+        const transactions = data.transactions || [];
+        content.innerHTML = `
+          <section class="reward-account">
+            <div class="reward-balance">
+              <span>SỐ DƯ HIỆN TẠI</span>
+              <strong>${Number(data.points || 0)}</strong>
+              <p>điểm thưởng</p>
+            </div>
+            <div class="reward-rule">
+              <strong>Cách tích điểm</strong>
+              <p>Mỗi đơn hàng được giao thành công sẽ nhận 1 điểm. Điểm chỉ được cộng một lần cho mỗi đơn.</p>
+            </div>
+            <div class="reward-history">
+              <h3>Lịch sử điểm</h3>
+              ${transactions.length ? transactions.map(item => `
+                <article class="reward-transaction">
+                  <div>
+                    <strong>${escapeHtml(rewardTransactionLabel(item.type))}</strong>
+                    <span>${escapeHtml(item.orderCode || item.description || '')}</span>
+                    <time>${notificationTime(item.createdAt)}</time>
+                  </div>
+                  <b class="${Number(item.points) >= 0 ? 'reward-plus' : 'reward-minus'}">
+                    ${Number(item.points) >= 0 ? '+' : ''}${Number(item.points)}
+                  </b>
+                </article>`).join('') : '<p class="reward-empty">Bạn chưa có giao dịch điểm thưởng nào.</p>'}
+            </div>
+          </section>`;
+    } catch (error) {
+        content.innerHTML = `<p class="cart-message cart-error">${escapeHtml(error.message)}</p>`;
+    }
+}
+
 function closeCartDrawer() {
     document.getElementById('cartDrawer')?.classList.remove('open');
     document.getElementById('cartBackdrop')?.classList.remove('open');
@@ -799,7 +864,7 @@ async function loadCartOrders() {
               <h3>${escapeHtml(order.productTitle)}</h3>
               <p>Màu ${escapeHtml(order.colorName)} · Size ${escapeHtml(order.size)} · SL ${order.quantity}</p>
               <div class="cart-order-bottom">
-                <b>${formatPrice(order.totalAmount)}</b>
+                <b>${order.paymentMethod === 'POINTS' ? `${Number(order.pointsUsed)} điểm` : formatPrice(order.totalAmount)}</b>
                 ${['UNPAID', 'PENDING'].includes(order.status) ? `<button type="button" data-cancel-order="${order.id}">HỦY ĐƠN</button>` : ''}
               </div>
             </div>
@@ -832,12 +897,20 @@ function renderShoppingCart() {
         loadOrderHistoryIntoDrawer();
         return;
     }
-    const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-    const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+    const selectedItems = cart.filter(item => item.selected);
+    const subtotal = selectedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    const itemCount = selectedItems.reduce((sum, item) => sum + item.quantity, 0);
     const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
     content.innerHTML = `
+      <div class="cart-selection-bar">
+        <label><input type="checkbox" data-cart-select-all ${selectedItems.length === cart.length ? 'checked' : ''}> Chọn tất cả</label>
+        <span>Đã chọn ${selectedItems.length}/${cart.length} sản phẩm</span>
+      </div>
       <div class="cart-items">${cart.map(item => `
-        <article class="shopping-cart-item">
+        <article class="shopping-cart-item ${item.selected ? '' : 'cart-item-unselected'}">
+          <label class="cart-item-check" aria-label="Chọn ${escapeHtml(item.title)}">
+            <input type="checkbox" data-cart-select="${item.variantId}" ${item.selected ? 'checked' : ''}>
+          </label>
           <img src="${escapeHtml(productImageUrl(item.imageUrl))}" alt="${escapeHtml(item.title)}">
           <div><button class="cart-remove" type="button" data-cart-remove="${item.variantId}" aria-label="Xóa sản phẩm">×</button>
             <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.colorName)} · Size ${escapeHtml(item.size)}</p>
@@ -857,10 +930,12 @@ function renderShoppingCart() {
         <input type="hidden" name="addressLabel" value="Địa chỉ giao hàng">
         <button type="button" class="save-address-button checkout-save-address">LƯU ĐỊA CHỈ NÀY</button>
         <label>Ghi chú (không bắt buộc)<textarea name="note"></textarea></label>
-        <button class="checkout-button" type="submit">MUA ${itemCount} SẢN PHẨM · ${formatPrice(subtotal)}</button>
+        <button class="checkout-button" type="submit" ${selectedItems.length ? '' : 'disabled'}>${selectedItems.length ? `MUA ${itemCount} SẢN PHẨM · ${formatPrice(subtotal)}` : 'VUI LÒNG CHỌN SẢN PHẨM'}</button>
+        <button class="reward-checkout-button" type="button" ${selectedItems.length ? '' : 'disabled'}>MUA BẰNG ĐIỂM · ${Math.ceil(subtotal / 100000)} ĐIỂM</button>
         <p class="checkout-note">Thông tin của bạn chỉ được dùng để giao đơn hàng này.</p>
       </form><div id="orderHistory"></div>`;
     content.querySelector('.checkout-form').onsubmit = submitCartCheckout;
+    content.querySelector('.reward-checkout-button').onclick = submitRewardCheckout;
     content.querySelector('.save-address-button').onclick = saveCheckoutAddress;
     loadSavedAddresses(content.querySelector('.checkout-form'));
     loadOrderHistoryIntoDrawer();
@@ -984,7 +1059,11 @@ async function submitCartCheckout(event) {
         window.alert('Vui lòng đăng nhập để hoàn tất đơn hàng. Giỏ hàng của bạn đã được lưu.');
         closeCartDrawer(); openAuthModal(); return;
     }
-    const cart = getShoppingCart();
+    const cart = getShoppingCart().filter(item => item.selected);
+    if (!cart.length) {
+        window.alert('Vui lòng chọn ít nhất một sản phẩm để mua.');
+        return;
+    }
     const button = event.currentTarget.querySelector('.checkout-button');
     const fields = Object.fromEntries(new FormData(event.currentTarget));
     button.disabled = true; button.textContent = 'ĐANG ĐẶT HÀNG...';
@@ -1007,6 +1086,94 @@ async function submitCartCheckout(event) {
     }
 }
 
+function confirmRewardPurchase({ pointsRequired, convertedValue, totalAmount, currentPoints }) {
+    return new Promise(resolve => {
+        document.getElementById('rewardConfirmModal')?.remove();
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="rewardConfirmModal" class="reward-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="rewardConfirmTitle">
+            <div class="reward-confirm-dialog">
+              <span class="reward-confirm-kicker">XÁC NHẬN ĐỔI ĐIỂM</span>
+              <h3 id="rewardConfirmTitle">Bạn có chắc chắn muốn mua bằng điểm?</h3>
+              <div class="reward-confirm-value"><strong>${pointsRequired} điểm</strong><span>=</span><strong>${formatPrice(convertedValue)}</strong></div>
+              <p>Giá sản phẩm: <b>${formatPrice(totalAmount)}</b></p>
+              ${convertedValue > totalAmount ? `<p>Phần quy đổi dư <b>${formatPrice(convertedValue - totalAmount)}</b> sẽ không được hoàn lại.</p>` : ''}
+              <p>Số dư sau khi mua: <b>${currentPoints - pointsRequired} điểm</b></p>
+              <div class="reward-confirm-actions">
+                <button type="button" data-reward-cancel>HỦY</button>
+                <button type="button" data-reward-confirm>XÁC NHẬN ĐỔI</button>
+              </div>
+            </div>
+          </div>`);
+        const modal = document.getElementById('rewardConfirmModal');
+        const finish = value => { modal.remove(); resolve(value); };
+        modal.querySelector('[data-reward-cancel]').onclick = () => finish(false);
+        modal.querySelector('[data-reward-confirm]').onclick = () => finish(true);
+        modal.onclick = event => { if (event.target === modal) finish(false); };
+    });
+}
+
+async function submitRewardCheckout(event) {
+    const form = event.currentTarget.closest('form');
+    if (!form.reportValidity()) return;
+    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const token = localStorage.getItem('authToken');
+    if (!token || !user || user.guest) {
+        window.alert('Vui lòng đăng nhập để mua sản phẩm bằng điểm.');
+        closeCartDrawer(); openAuthModal(); return;
+    }
+    const selectedItems = getShoppingCart().filter(item => item.selected);
+    if (!selectedItems.length) {
+        window.alert('Vui lòng chọn ít nhất một sản phẩm để mua.');
+        return;
+    }
+    const totalAmount = selectedItems.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
+    const pointsRequired = Math.ceil(totalAmount / 100000);
+    const button = event.currentTarget;
+    try {
+        button.disabled = true;
+        button.textContent = 'ĐANG KIỂM TRA ĐIỂM...';
+        const balanceResponse = await fetch(`${API_BASE_URL}/api/user/rewards`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const balanceData = await readApiJson(balanceResponse);
+        if (!balanceResponse.ok) throw new Error(balanceData.message || 'Không thể kiểm tra điểm thưởng.');
+        if (Number(balanceData.points) < pointsRequired) {
+            throw new Error(`Bạn cần ${pointsRequired} điểm nhưng hiện chỉ có ${balanceData.points} điểm.`);
+        }
+        const confirmed = await confirmRewardPurchase({
+            pointsRequired,
+            convertedValue: pointsRequired * 100000,
+            totalAmount,
+            currentPoints: Number(balanceData.points)
+        });
+        if (!confirmed) return;
+
+        button.textContent = 'ĐANG ĐỔI ĐIỂM...';
+        const fields = Object.fromEntries(new FormData(form));
+        const response = await fetch(`${API_BASE_URL}/api/orders/reward`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+                ...fields,
+                items: selectedItems.map(item => ({ productVariantId: item.variantId, quantity: item.quantity }))
+            })
+        });
+        const result = await readApiJson(response);
+        if (!response.ok) throw new Error(result.message || 'Không thể mua sản phẩm bằng điểm.');
+        const purchasedIds = new Set(selectedItems.map(item => String(item.variantId)));
+        saveShoppingCart(getShoppingCart().filter(item => !purchasedIds.has(String(item.variantId))));
+        window.alert(`Đổi điểm thành công! Đã dùng ${result.pointsUsed} điểm. Mã đơn: ${result.orderCode}. Bạn còn ${result.pointsRemaining} điểm.`);
+        renderShoppingCart();
+    } catch (error) {
+        window.alert(error.message);
+    } finally {
+        if (document.body.contains(button)) {
+            button.disabled = false;
+            button.textContent = `MUA BẰNG ĐIỂM · ${pointsRequired} ĐIỂM`;
+        }
+    }
+}
+
 document.addEventListener('click', event => {
     if (event.target.closest('[data-close-cart]')) closeCartDrawer();
     const remove = event.target.closest('[data-cart-remove]');
@@ -1019,6 +1186,21 @@ document.addEventListener('click', event => {
     const item = cart.find(entry => String(entry.variantId) === String(id));
     if (remove) saveShoppingCart(cart.filter(entry => String(entry.variantId) !== String(id)));
     else if (item) { item.quantity = Math.min(item.stockQty, Math.max(1, item.quantity + (plus ? 1 : -1))); saveShoppingCart(cart); }
+    renderShoppingCart();
+});
+
+document.addEventListener('change', event => {
+    const itemCheckbox = event.target.closest('[data-cart-select]');
+    const selectAll = event.target.closest('[data-cart-select-all]');
+    if (!itemCheckbox && !selectAll) return;
+    const cart = getShoppingCart();
+    if (selectAll) {
+        cart.forEach(item => { item.selected = selectAll.checked; });
+    } else {
+        const item = cart.find(entry => String(entry.variantId) === String(itemCheckbox.dataset.cartSelect));
+        if (item) item.selected = itemCheckbox.checked;
+    }
+    saveShoppingCart(cart);
     renderShoppingCart();
 });
 

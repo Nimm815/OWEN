@@ -85,7 +85,8 @@ function buildUserResponse(user) {
     id: user.id,
     name: user.name,
     email: user.email,
-    role: user.role || 'ROLE_USER'
+    role: user.role || 'ROLE_USER',
+    rewardPoints: Number(user.rewardPoints || 0)
   };
 }
 
@@ -155,7 +156,8 @@ function authenticateToken(req, res, next) {
 
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email, Role as role FROM Users WHERE Id = ?', [req.user.id]);
+    await ensureRewardPointsSchema();
+    const [rows] = await pool.execute('SELECT Id as id, Name as name, Email as email, Role as role, RewardPoints as rewardPoints FROM Users WHERE Id = ?', [req.user.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ message: 'Người dùng không tồn tại.' });
     return res.json({ user: buildUserResponse(user) });
@@ -182,6 +184,180 @@ async function ensureUserAddressesTable() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 }
+
+let rewardSchemaPromise;
+function ensureRewardPointsSchema() {
+  if (!rewardSchemaPromise) {
+    rewardSchemaPromise = (async () => {
+      const [columns] = await pool.execute("SHOW COLUMNS FROM Users LIKE 'RewardPoints'");
+      if (!columns.length) {
+        await pool.execute('ALTER TABLE Users ADD COLUMN RewardPoints INT NOT NULL DEFAULT 0 AFTER LockedUntil');
+      }
+      const [orderColumns] = await pool.execute("SHOW COLUMNS FROM Orders LIKE 'PointsUsed'");
+      if (!orderColumns.length) {
+        await pool.execute("ALTER TABLE Orders MODIFY COLUMN PaymentMethod ENUM('COD','VNPAY','POINTS') NOT NULL, ADD COLUMN PointsUsed INT NOT NULL DEFAULT 0 AFTER TotalAmount");
+      }
+      await pool.execute(`
+        CREATE TABLE IF NOT EXISTS RewardTransactions (
+          Id INT AUTO_INCREMENT PRIMARY KEY,
+          UserId INT NOT NULL,
+          OrderId INT NULL,
+          Points INT NOT NULL,
+          Type ENUM('ORDER_EARNED','REWARD_REDEEMED','ORDER_REVERSED','ADMIN_ADJUSTED') NOT NULL,
+          Description VARCHAR(255) NULL,
+          CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE ON UPDATE CASCADE,
+          FOREIGN KEY (OrderId) REFERENCES Orders(Id) ON DELETE SET NULL ON UPDATE CASCADE,
+          UNIQUE KEY unique_reward_order_type (OrderId, Type),
+          INDEX idx_reward_transactions_user_created (UserId, CreatedAt)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+    })().catch(error => {
+      rewardSchemaPromise = null;
+      throw error;
+    });
+  }
+  return rewardSchemaPromise;
+}
+
+app.get('/api/user/rewards', authenticateToken, async (req, res) => {
+  try {
+    await ensureRewardPointsSchema();
+    const [[account]] = await pool.execute(
+      'SELECT RewardPoints AS points FROM Users WHERE Id = ?',
+      [req.user.id]
+    );
+    if (!account) return res.status(404).json({ message: 'Người dùng không tồn tại.' });
+    const [transactions] = await pool.execute(
+      `SELECT rt.Id AS id, rt.OrderId AS orderId, rt.Points AS points,
+              rt.Type AS type, rt.Description AS description, rt.CreatedAt AS createdAt,
+              o.OrderCode AS orderCode
+       FROM RewardTransactions rt
+       LEFT JOIN Orders o ON o.Id = rt.OrderId
+       WHERE rt.UserId = ?
+       ORDER BY rt.CreatedAt DESC, rt.Id DESC
+       LIMIT 100`,
+      [req.user.id]
+    );
+    return res.json({ points: Number(account.points || 0), transactions });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể tải thông tin điểm thưởng.' });
+  }
+});
+
+app.post('/api/orders/reward', authenticateToken, async (req, res) => {
+  const { items, recipientName, recipientPhone, recipientAddress, note } = req.body;
+  if (!Array.isArray(items) || !items.length || items.length > 50 ||
+      !recipientName?.trim() || !recipientPhone?.trim() || !recipientAddress?.trim()) {
+    return res.status(400).json({ message: 'Vui lòng chọn sản phẩm và nhập đầy đủ thông tin nhận hàng.' });
+  }
+
+  const quantitiesByVariant = new Map();
+  for (const item of items) {
+    const variantId = Number(item.productVariantId);
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(variantId) || variantId < 1 || !Number.isInteger(quantity) || quantity < 1) {
+      return res.status(400).json({ message: 'Sản phẩm hoặc số lượng không hợp lệ.' });
+    }
+    quantitiesByVariant.set(variantId, (quantitiesByVariant.get(variantId) || 0) + quantity);
+  }
+
+  let connection;
+  try {
+    await ensureRewardPointsSchema();
+    const settings = await getStoreSettings();
+    if (settings.pauseOrders === 'true') {
+      return res.status(503).json({ message: 'Cửa hàng đang tạm ngừng nhận đơn.' });
+    }
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const variantIds = [...quantitiesByVariant.keys()];
+    const placeholders = variantIds.map(() => '?').join(',');
+    const [variants] = await connection.execute(
+      `SELECT v.Id AS id, v.StockQty AS stockQty, COALESCE(v.Price, p.Price) AS unitPrice,
+              p.Title AS title, p.IsActive AS isActive
+       FROM ProductVariants v
+       INNER JOIN Products p ON p.Id = v.ProductId
+       WHERE v.Id IN (${placeholders})
+       FOR UPDATE`,
+      variantIds
+    );
+    if (variants.length !== variantIds.length || variants.some(item => !item.isActive)) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Một sản phẩm đã ngừng bán hoặc không còn tồn tại.' });
+    }
+
+    let totalAmount = 0;
+    for (const variant of variants) {
+      const quantity = quantitiesByVariant.get(Number(variant.id));
+      if (Number(variant.stockQty) < quantity) {
+        await connection.rollback();
+        return res.status(409).json({ message: `${variant.title} chỉ còn ${variant.stockQty} sản phẩm.` });
+      }
+      totalAmount += Number(variant.unitPrice) * quantity;
+    }
+    const pointsRequired = Math.ceil(totalAmount / 100000);
+
+    const [[account]] = await connection.execute(
+      'SELECT RewardPoints AS points FROM Users WHERE Id = ? FOR UPDATE',
+      [req.user.id]
+    );
+    if (!account) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Người dùng không tồn tại.' });
+    }
+    if (Number(account.points) < pointsRequired) {
+      await connection.rollback();
+      return res.status(409).json({ message: `Bạn cần ${pointsRequired} điểm nhưng hiện chỉ có ${account.points} điểm.` });
+    }
+
+    const orderCode = `OWEN-R-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const [orderResult] = await connection.execute(
+      `INSERT INTO Orders
+         (OrderCode, UserId, RecipientName, RecipientPhone, RecipientAddress, PaymentMethod, Status, TotalAmount, PointsUsed, Note)
+       VALUES (?, ?, ?, ?, ?, 'POINTS', 'PENDING', ?, ?, ?)`,
+      [orderCode, req.user.id, recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), totalAmount, pointsRequired, note?.trim() || null]
+    );
+    for (const variant of variants) {
+      const quantity = quantitiesByVariant.get(Number(variant.id));
+      const unitPrice = Number(variant.unitPrice);
+      await connection.execute(
+        'INSERT INTO OrderItems (OrderId, ProductVariantId, Quantity, UnitPrice, TotalPrice) VALUES (?, ?, ?, ?, ?)',
+        [orderResult.insertId, variant.id, quantity, unitPrice, unitPrice * quantity]
+      );
+      await connection.execute(
+        'UPDATE ProductVariants SET StockQty = StockQty - ? WHERE Id = ?',
+        [quantity, variant.id]
+      );
+    }
+    await connection.execute(
+      'UPDATE Users SET RewardPoints = RewardPoints - ? WHERE Id = ?',
+      [pointsRequired, req.user.id]
+    );
+    await connection.execute(
+      `INSERT INTO RewardTransactions (UserId, OrderId, Points, Type, Description)
+       VALUES (?, ?, ?, 'REWARD_REDEEMED', ?)`,
+      [req.user.id, orderResult.insertId, -pointsRequired, `Dùng ${pointsRequired} điểm mua đơn ${orderCode}`]
+    );
+    await connection.commit();
+    return res.status(201).json({
+      id: orderResult.insertId,
+      orderCode,
+      status: 'PENDING',
+      totalAmount,
+      pointsUsed: pointsRequired,
+      pointsRemaining: Number(account.points) - pointsRequired
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể tạo đơn hàng bằng điểm.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
 
 app.get('/api/user/addresses', authenticateToken, async (req, res) => {
   try {
@@ -630,9 +806,10 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
 // Customer order history (shown in the storefront cart).
 app.get('/api/orders', authenticateToken, async (req, res) => {
   try {
+    await ensureRewardPointsSchema();
     const [rows] = await pool.execute(
       `SELECT o.Id AS id, o.OrderCode AS orderCode, o.Status AS status,
-              o.TotalAmount AS totalAmount, o.PaymentMethod AS paymentMethod,
+              o.TotalAmount AS totalAmount, o.PaymentMethod AS paymentMethod, o.PointsUsed AS pointsUsed,
               o.CreatedAt AS createdAt, oi.Quantity AS quantity,
               oi.UnitPrice AS unitPrice, p.Title AS productTitle,
               p.ImageUrl AS imageUrl, c.Name AS colorName, s.Value AS size
@@ -656,10 +833,11 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
 app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
   let connection;
   try {
+    await ensureRewardPointsSchema();
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [orders] = await connection.execute(
-      'SELECT Status AS status FROM Orders WHERE Id = ? AND UserId = ? FOR UPDATE',
+      'SELECT Status AS status, PaymentMethod AS paymentMethod, PointsUsed AS pointsUsed, OrderCode AS orderCode FROM Orders WHERE Id = ? AND UserId = ? FOR UPDATE',
       [req.params.id, req.user.id]
     );
     if (!orders.length) {
@@ -682,6 +860,19 @@ app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
        WHERE oi.OrderId = ?`,
       [req.params.id]
     );
+    if (orders[0].paymentMethod === 'POINTS' && Number(orders[0].pointsUsed) > 0) {
+      const [refundResult] = await connection.execute(
+        `INSERT IGNORE INTO RewardTransactions (UserId, OrderId, Points, Type, Description)
+         VALUES (?, ?, ?, 'ORDER_REVERSED', ?)`,
+        [req.user.id, req.params.id, Number(orders[0].pointsUsed), `Hoàn điểm đơn ${orders[0].orderCode} bị hủy`]
+      );
+      if (refundResult.affectedRows) {
+        await connection.execute(
+          'UPDATE Users SET RewardPoints = RewardPoints + ? WHERE Id = ?',
+          [Number(orders[0].pointsUsed), req.user.id]
+        );
+      }
+    }
     await connection.execute("UPDATE Orders SET Status = 'CANCELLED' WHERE Id = ?", [req.params.id]);
     await connection.commit();
     return res.json({ id: Number(req.params.id), status: 'CANCELLED' });
@@ -1149,6 +1340,7 @@ app.delete('/api/admin/users/:id', authenticateToken, isAdmin, async (req, res) 
 // Admin orders list
 app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
   try {
+    await ensureRewardPointsSchema();
     const [rows] = await pool.execute(`
       SELECT o.Id as id,
              o.OrderCode as orderCode,
@@ -1159,6 +1351,7 @@ app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
              o.Note as note,
              o.Status as status,
              o.PaymentMethod as paymentMethod,
+             o.PointsUsed as pointsUsed,
              o.TotalAmount as totalAmount,
              o.CreatedAt as createdAt
       FROM Orders o
@@ -1178,10 +1371,11 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
   let connection;
   try {
     await ensureNotificationsTable();
+    await ensureRewardPointsSchema();
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [orders] = await connection.execute(
-      'SELECT Status AS status, UserId AS userId, OrderCode AS orderCode FROM Orders WHERE Id = ? FOR UPDATE',
+      'SELECT Status AS status, UserId AS userId, OrderCode AS orderCode, PaymentMethod AS paymentMethod, PointsUsed AS pointsUsed FROM Orders WHERE Id = ? FOR UPDATE',
       [req.params.id]
     );
     if (!orders.length) {
@@ -1208,8 +1402,35 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
          WHERE oi.OrderId = ?`,
         [req.params.id]
       );
+      if (orders[0].paymentMethod === 'POINTS' && orders[0].userId && Number(orders[0].pointsUsed) > 0) {
+        const [refundResult] = await connection.execute(
+          `INSERT IGNORE INTO RewardTransactions (UserId, OrderId, Points, Type, Description)
+           VALUES (?, ?, ?, 'ORDER_REVERSED', ?)`,
+          [orders[0].userId, req.params.id, Number(orders[0].pointsUsed), `Hoàn điểm đơn ${orders[0].orderCode} bị hủy`]
+        );
+        if (refundResult.affectedRows) {
+          await connection.execute(
+            'UPDATE Users SET RewardPoints = RewardPoints + ? WHERE Id = ?',
+            [Number(orders[0].pointsUsed), orders[0].userId]
+          );
+        }
+      }
     }
     const [result] = await connection.execute('UPDATE Orders SET Status = ? WHERE Id = ?', [status, req.params.id]);
+    if (status === 'DELIVERED' && currentStatus !== 'DELIVERED' && orders[0].userId && orders[0].paymentMethod !== 'POINTS') {
+      const [rewardResult] = await connection.execute(
+        `INSERT IGNORE INTO RewardTransactions
+           (UserId, OrderId, Points, Type, Description)
+         VALUES (?, ?, 1, 'ORDER_EARNED', ?)`,
+        [orders[0].userId, req.params.id, `Cộng điểm từ đơn ${orders[0].orderCode}`]
+      );
+      if (rewardResult.affectedRows) {
+        await connection.execute(
+          'UPDATE Users SET RewardPoints = RewardPoints + 1 WHERE Id = ?',
+          [orders[0].userId]
+        );
+      }
+    }
     if (status !== currentStatus && orders[0].userId) {
       const notificationByStatus = {
         SHIPPING: {
