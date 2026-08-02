@@ -926,6 +926,9 @@ app.put('/api/notifications/read', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/messages/shop', authenticateToken, async (req, res) => {
+  if (['ADMIN', 'ROLE_ADMIN'].includes(req.user.role)) {
+    return res.status(403).json({ message: 'Tài khoản quản trị không thể sử dụng hộp chat khách hàng.' });
+  }
   try {
     await ensureMessagesTable();
     const [messages] = await pool.execute(
@@ -953,6 +956,9 @@ app.get('/api/messages/shop', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/messages/shop', authenticateToken, async (req, res) => {
+  if (['ADMIN', 'ROLE_ADMIN'].includes(req.user.role)) {
+    return res.status(403).json({ message: 'Tài khoản quản trị không thể tự nhắn tin cho cửa hàng.' });
+  }
   const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
   const orderId = req.body.orderId ? Number(req.body.orderId) : null;
   if (!content || content.length > 1000) {
@@ -982,6 +988,9 @@ app.post('/api/messages/shop', authenticateToken, async (req, res) => {
 });
 
 app.put('/api/messages/shop/read', authenticateToken, async (req, res) => {
+  if (['ADMIN', 'ROLE_ADMIN'].includes(req.user.role)) {
+    return res.status(403).json({ message: 'Tài khoản quản trị không thể sử dụng hộp chat khách hàng.' });
+  }
   try {
     await ensureMessagesTable();
     const [result] = await pool.execute(
@@ -1007,11 +1016,16 @@ app.get('/api/admin/messages', authenticateToken, isAdmin, async (req, res) => {
        FROM Messages m
        INNER JOIN Users sender ON sender.Id = m.SenderId
        INNER JOIN Users receiver ON receiver.Id = m.ReceiverId
+       WHERE ((sender.Role = 'ROLE_USER' AND receiver.Role IN ('ADMIN', 'ROLE_ADMIN'))
+          OR (receiver.Role = 'ROLE_USER' AND sender.Role IN ('ADMIN', 'ROLE_ADMIN')))
        ORDER BY m.CreatedAt ASC
        LIMIT 1000`
     );
     const [[{ unreadCount }]] = await pool.execute(
-      'SELECT COUNT(*) AS unreadCount FROM Messages WHERE ReceiverId = ? AND IsRead = 0',
+      `SELECT COUNT(*) AS unreadCount
+       FROM Messages m
+       INNER JOIN Users sender ON sender.Id = m.SenderId
+       WHERE m.ReceiverId = ? AND m.IsRead = 0 AND sender.Role = 'ROLE_USER'`,
       [req.user.id]
     );
     return res.json({ messages, unreadCount });

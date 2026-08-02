@@ -271,8 +271,27 @@ document.addEventListener('keydown', event => {
 // ================= AUTH SYSTEM =================
 
 // Initialize auth system
-function initAuth() {
-    const currentUser = localStorage.getItem('currentUser');
+async function initAuth() {
+    let currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    const token = localStorage.getItem('authToken');
+
+    // Older admin logins only saved the token. Restore the account so the
+    // storefront can apply the correct role-based UI restrictions.
+    if (token && !currentUser) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await response.json();
+            if (response.ok && data.user) {
+                currentUser = data.user;
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
+        } catch (error) {
+            console.error('Không thể khôi phục phiên đăng nhập:', error);
+        }
+    }
+
     const isFirstVisit = !localStorage.getItem('authInitialized');
     
     if (isFirstVisit) {
@@ -1236,7 +1255,9 @@ function updateShopChatButton(unreadCount) {
     const widget = document.querySelector('.shop-chat-widget');
     if (!widget) return;
     const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
-    const signedIn = user && !user.guest && localStorage.getItem('authToken');
+    const signedIn = user && !user.guest
+        && !['ADMIN', 'ROLE_ADMIN'].includes(user.role)
+        && localStorage.getItem('authToken');
     widget.hidden = !signedIn;
     const badge = document.getElementById('shopChatCount');
     if (badge && Number.isInteger(unreadCount)) {
@@ -1248,7 +1269,7 @@ function updateShopChatButton(unreadCount) {
 async function loadShopMessages(markRead = false) {
     const token = localStorage.getItem('authToken');
     const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
-    if (!token || !user || user.guest) {
+    if (!token || !user || user.guest || ['ADMIN', 'ROLE_ADMIN'].includes(user.role)) {
         updateShopChatButton(0);
         return;
     }
