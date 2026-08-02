@@ -292,6 +292,13 @@ async function initAuth() {
         }
     }
 
+    // Keep administrator accounts in the management area even when the
+    // storefront is refreshed or opened in a new tab with an existing session.
+    if (token && currentUser && ['ADMIN', 'ROLE_ADMIN'].includes(currentUser.role)) {
+        window.location.replace('/admin/');
+        return;
+    }
+
     const isFirstVisit = !localStorage.getItem('authInitialized');
     
     if (isFirstVisit) {
