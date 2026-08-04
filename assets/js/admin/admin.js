@@ -476,8 +476,9 @@ document.getElementById('logoutBtn').onclick = () => {
   localStorage.removeItem('auth_token');
   localStorage.removeItem('currentUser');
   localStorage.removeItem('authInitialized');
-  const isBackendServer = window.location.port === '3000';
-  window.location.href = isBackendServer ? '/' : '/HTML/index.html';
+  const isLocalLiveServer = ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    && window.location.port !== '3000';
+  window.location.href = isLocalLiveServer ? '/HTML/index.html' : '/';
 };
 window.addEventListener('storage', event => {
   if (event.key === 'owenMessageUpdate') refreshAdminMessageBadge();
