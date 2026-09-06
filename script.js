@@ -74,9 +74,10 @@ function escapeHtml(value) {
 }
 
 function productImageUrl(imageUrl) {
-    if (!imageUrl) return '/Images/card_reveal1.jpg';
-    if (/^https?:\/\//i.test(imageUrl) || imageUrl.startsWith('/')) return imageUrl;
-    return `/${imageUrl.replace(/^\.\.\//, '')}`;
+    if (!imageUrl) return `${API_BASE_URL}/Images/card_reveal1.jpg`;
+    if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+    const normalizedPath = `/${imageUrl.replace(/^(\.\.\/|\/)+/, '')}`;
+    return `${API_BASE_URL}${normalizedPath}`;
 }
 
 function formatPrice(price) {
