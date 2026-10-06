@@ -84,6 +84,22 @@ function formatPrice(price) {
     return `${Number(price || 0).toLocaleString('vi-VN')} đ`;
 }
 
+async function loadStoreInfo() {
+    const footer = document.querySelector('footer');
+    if (!footer || footer.querySelector('.store-policy-summary')) return;
+    let info = { storeName: 'OWEN', storePhone: '0866032663', storeAddress: 'Ngõ 43 đường Hạ Hội', storeEmail: '' };
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/store-info`);
+        if (response.ok) info = { ...info, ...(await response.json()) };
+    } catch (error) { console.warn('Không thể tải thông tin cửa hàng.', error); }
+    const phone = String(info.storePhone || '').replace(/[^+\d]/g, '');
+    footer.insertAdjacentHTML('beforeend', `<div class="store-policy-summary">
+      <p><strong>${escapeHtml(info.storeName || 'OWEN')}</strong>${info.storePhone ? ` · Hỗ trợ: <a href="tel:${escapeHtml(phone)}">${escapeHtml(info.storePhone)}</a>` : ''}${info.storeEmail ? ` · ${escapeHtml(info.storeEmail)}` : ''}</p>
+      ${info.storeAddress ? `<p>Địa chỉ lấy hàng: ${escapeHtml(info.storeAddress)}</p>` : ''}
+      <p>Giao hàng qua J&amp;T/SPX · Đổi size hoặc trả hàng trong 7 ngày từ khi giao thành công. Khách chịu phí vận chuyển; hàng không rách hoặc hỏng.</p>
+    </div>`);
+}
+
 async function loadHomepageProducts() {
     const gallery = document.getElementById('productGallery');
     if (!gallery) return;
@@ -120,9 +136,22 @@ async function loadCategoryProducts() {
 
     const category = grid.dataset.storeCategory;
     const isShowcase = grid.dataset.displayMode === 'showcase';
+    if (!isShowcase && !document.getElementById('catalogTools')) {
+        grid.insertAdjacentHTML('beforebegin', `<div id="catalogTools" class="catalog-tools">
+          <label>Tìm sản phẩm<input type="search" id="catalogSearch" placeholder="Tên, mã hoặc mô tả..."></label>
+          <label>Sắp xếp<select id="catalogSort"><option value="newest">Mới nhất</option><option value="price_asc">Giá thấp đến cao</option><option value="price_desc">Giá cao đến thấp</option></select></label>
+        </div>`);
+        let searchTimer;
+        document.getElementById('catalogSearch').addEventListener('input', () => {
+            clearTimeout(searchTimer); searchTimer = setTimeout(loadCategoryProducts, 300);
+        });
+        document.getElementById('catalogSort').addEventListener('change', loadCategoryProducts);
+    }
+    const search = document.getElementById('catalogSearch')?.value.trim() || '';
+    const sort = document.getElementById('catalogSort')?.value || 'newest';
     grid.innerHTML = '<p class="products-message">Đang tải sản phẩm...</p>';
     try {
-        const response = await fetch(`${API_BASE_URL}/api/products?limit=48&category=${encodeURIComponent(category)}`);
+        const response = await fetch(`${API_BASE_URL}/api/products?limit=48&category=${encodeURIComponent(category)}&q=${encodeURIComponent(search)}&sort=${encodeURIComponent(sort)}`);
         const data = await readApiJson(response);
         if (!response.ok) throw new Error(data.message || 'Không thể tải sản phẩm.');
 
@@ -211,7 +240,7 @@ async function openPurchaseModal(productId) {
                 <div class="purchase-summary"><span>Tạm tính</span><div class="purchase-price" id="purchasePrice"></div></div>
                 <button class="purchase-button" type="submit">THÊM VÀO GIỎ HÀNG</button>
                 <button class="purchase-buy-now" type="button">MUA NGAY</button>
-                <p class="purchase-assurance">Miễn phí đổi size · Kiểm tra hàng trước khi nhận</p>` :
+                <p class="purchase-assurance">Đổi size hoặc trả hàng trong 7 ngày · Khách thanh toán phí vận chuyển</p>` :
                 `<div class="purchase-price">${formatPrice(product.price)}</div><p class="purchase-stock">Sản phẩm hiện chưa có màu và size khả dụng.</p><button class="purchase-button" type="button" disabled>HẾT HÀNG</button>`}
             </form>
           </div>`;
@@ -515,7 +544,7 @@ function updateAuthUI() {
 // ================= CART / CUSTOMER ORDERS =================
 
 const orderStatusLabels = {
-    UNPAID: 'Chưa thanh toán',
+    UNPAID: 'Chờ báo phí / thanh toán',
     PENDING: 'Chờ xác nhận',
     SHIPPING: 'Đang giao',
     DELIVERED: 'Đã giao',
@@ -882,14 +911,18 @@ async function loadCartOrders() {
         }
         content.innerHTML = `<section class="order-history"><h3>Đơn hàng gần đây</h3>${orders.map(order => `
           <article class="cart-order">
-            <img src="${escapeHtml(productImageUrl(order.imageUrl))}" alt="${escapeHtml(order.productTitle)}">
+            <img src="${escapeHtml(productImageUrl(order.items?.[0]?.imageUrl))}" alt="${escapeHtml(order.items?.[0]?.productTitle || order.orderCode)}">
             <div class="cart-order-info">
               <div class="cart-order-top">
                 <span>${escapeHtml(order.orderCode)}</span>
                 <strong class="status-${String(order.status).toLowerCase()}">${orderStatusLabels[order.status] || escapeHtml(order.status)}</strong>
               </div>
-              <h3>${escapeHtml(order.productTitle)}</h3>
-              <p>Màu ${escapeHtml(order.colorName)} · Size ${escapeHtml(order.size)} · SL ${order.quantity}</p>
+              <h3>${escapeHtml((order.items || []).map(item => `${item.productTitle} × ${item.quantity}`).join(', '))}</h3>
+              <p>${order.carrier ? `${escapeHtml(order.carrier)}${order.trackingCode ? ` · ${escapeHtml(order.trackingCode)}` : ''}` : 'Shop đang chuẩn bị báo phí vận chuyển'}</p>
+              ${order.status === 'UNPAID' && order.shippingFee !== null ? `<div class="order-payment"><p>Tiền hàng ${formatPrice(order.subtotalAmount)} + phí ship ${formatPrice(order.shippingFee)}</p><img src="${API_BASE_URL}/Images/owen-payment-qr.jpg" alt="QR thanh toán VietinBank"><small>Nội dung chuyển khoản: ${escapeHtml(order.orderCode)} · Hotline 0866032663</small></div>` : ''}
+              ${order.status === 'DELIVERED' ? `<p class="return-policy">Đổi size hoặc trả hàng trong 7 ngày từ lúc giao thành công; khách thanh toán phí vận chuyển, hàng không rách hoặc hỏng.</p>` : ''}
+              ${order.status === 'DELIVERED' && !order.returnStatus ? `<button type="button" class="return-request-button" data-return-order="${order.id}">YÊU CẦU ĐỔI / TRẢ</button>` : ''}
+              ${order.returnStatus ? `<p class="return-policy">Yêu cầu đổi trả: ${escapeHtml(order.returnStatus)}</p>` : ''}
               <div class="cart-order-bottom">
                 <b>${order.paymentMethod === 'POINTS' ? `${Number(order.pointsUsed)} điểm` : formatPrice(order.totalAmount)}</b>
                 ${['UNPAID', 'PENDING'].includes(order.status) ? `<button type="button" data-cancel-order="${order.id}">HỦY ĐƠN</button>` : ''}
@@ -952,14 +985,14 @@ function renderShoppingCart() {
         <div class="saved-addresses" aria-live="polite"></div>
         <label>Họ tên<input name="recipientName" value="${escapeHtml(user?.guest ? '' : user?.name || '')}" required autocomplete="name"></label>
         <div class="checkout-row"><label>Số điện thoại<input name="recipientPhone" required autocomplete="tel"></label>
-          <label>Thanh toán<select name="paymentMethod"><option value="COD">Khi nhận hàng</option><option value="VNPAY">VNPay</option></select></label></div>
+          <label>Thanh toán<input value="Chuyển khoản QR VietinBank" readonly></label></div>
         <label>Địa chỉ<textarea name="recipientAddress" required autocomplete="street-address"></textarea></label>
         <input type="hidden" name="addressLabel" value="Địa chỉ giao hàng">
         <button type="button" class="save-address-button checkout-save-address">LƯU ĐỊA CHỈ NÀY</button>
         <label>Ghi chú (không bắt buộc)<textarea name="note"></textarea></label>
-        <button class="checkout-button" type="submit" ${selectedItems.length ? '' : 'disabled'}>${selectedItems.length ? `MUA ${itemCount} SẢN PHẨM · ${formatPrice(subtotal)}` : 'VUI LÒNG CHỌN SẢN PHẨM'}</button>
+        <button class="checkout-button" type="submit" ${selectedItems.length ? '' : 'disabled'}>${selectedItems.length ? `GỬI ĐƠN ${itemCount} SẢN PHẨM · ${formatPrice(subtotal)}` : 'VUI LÒNG CHỌN SẢN PHẨM'}</button>
         <button class="reward-checkout-button" type="button" ${selectedItems.length ? '' : 'disabled'}>MUA BẰNG ĐIỂM · ${Math.ceil(subtotal / 100000)} ĐIỂM</button>
-        <p class="checkout-note">Thông tin của bạn chỉ được dùng để giao đơn hàng này.</p>
+        <p class="checkout-note">Shop sẽ báo cước J&T hoặc SPX. Sau đó bạn chuyển khoản đúng tổng tiền bằng QR. Hỗ trợ: 0866032663.</p>
       </form><div id="orderHistory"></div>`;
     content.querySelector('.checkout-form').onsubmit = submitCartCheckout;
     content.querySelector('.reward-checkout-button').onclick = submitRewardCheckout;
@@ -1095,18 +1128,15 @@ async function submitCartCheckout(event) {
     const fields = Object.fromEntries(new FormData(event.currentTarget));
     button.disabled = true; button.textContent = 'ĐANG ĐẶT HÀNG...';
     try {
-        const codes = [];
-        for (const item of cart) {
-            const response = await fetch(`${API_BASE_URL}/api/orders`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ ...fields, productVariantId: item.variantId, quantity: item.quantity })
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.message || `Không thể đặt ${item.title}.`);
-            codes.push(result.orderCode);
-            saveShoppingCart(getShoppingCart().filter(entry => String(entry.variantId) !== String(item.variantId)));
-        }
-        window.alert(`Đặt hàng thành công! Mã đơn: ${codes.join(', ')}`);
+        const response = await fetch(`${API_BASE_URL}/api/orders`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ ...fields, items: cart.map(item => ({ productVariantId: item.variantId, quantity: item.quantity })) })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Không thể đặt hàng.');
+        const purchasedIds = new Set(cart.map(item => String(item.variantId)));
+        saveShoppingCart(getShoppingCart().filter(item => !purchasedIds.has(String(item.variantId))));
+        window.alert(`Đã gửi đơn ${result.orderCode}. Shop sẽ báo phí J&T/SPX; QR thanh toán sẽ xuất hiện trong lịch sử đơn.`);
         renderShoppingCart();
     } catch (error) {
         window.alert(error.message); button.disabled = false; button.textContent = 'THỬ ĐẶT HÀNG LẠI';
@@ -1250,6 +1280,25 @@ document.addEventListener('click', async event => {
         button.disabled = false;
         button.textContent = 'HỦY ĐƠN';
     }
+});
+
+document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-return-order]');
+    if (!button) return;
+    const exchange = window.confirm('Chọn OK để đổi size. Chọn Cancel để trả hàng.');
+    const reason = window.prompt('Mô tả ngắn tình trạng hàng và nhu cầu của bạn:');
+    if (reason === null) return;
+    button.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/orders/${button.dataset.returnOrder}/return-request`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken')}` },
+            body: JSON.stringify({ requestType: exchange ? 'SIZE_EXCHANGE' : 'RETURN', reason })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Không thể gửi yêu cầu.');
+        window.alert(result.message); loadCartOrders();
+    } catch (error) { window.alert(error.message); button.disabled = false; }
 });
 
 // Show error message
@@ -1515,6 +1564,7 @@ document.addEventListener('click', function(event) {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    loadStoreInfo();
     initAuth();
     ensureCartDrawer();
     renderShoppingCart();

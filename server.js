@@ -470,16 +470,51 @@ function isValidOrderStatus(value) {
 const defaultStoreSettings = {
   storeName: 'OWEN Việt Nam',
   storeEmail: '',
-  storePhone: '',
-  storeAddress: '',
+  storePhone: '0866032663',
+  storeAddress: 'Ngõ 43 đường Hạ Hội',
   lowStockThreshold: '5',
   allowOrderCancellation: 'true',
   shippingFee: '0',
   freeShippingThreshold: '0',
-  enableCod: 'true',
+  enableCod: 'false',
   enableVnpay: 'true',
   pauseOrders: 'false'
 };
+
+async function ensureOrderFulfillmentSchema() {
+  const additions = {
+    SubtotalAmount: 'DECIMAL(12,2) NULL',
+    ShippingFee: 'DECIMAL(12,2) NULL',
+    Carrier: 'VARCHAR(30) NULL',
+    TrackingCode: 'VARCHAR(100) NULL',
+    PaymentConfirmedAt: 'DATETIME NULL',
+    DeliveredAt: 'DATETIME NULL'
+  };
+  const [columns] = await pool.execute(
+    `SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Orders'`
+  );
+  const existing = new Set(columns.map(column => column.name));
+  for (const [name, definition] of Object.entries(additions)) {
+    if (!existing.has(name)) await pool.query(`ALTER TABLE Orders ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+async function ensureReturnRequestsTable() {
+  await pool.execute(`CREATE TABLE IF NOT EXISTS ReturnRequests (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    OrderId INT NOT NULL,
+    UserId INT NOT NULL,
+    RequestType ENUM('SIZE_EXCHANGE','RETURN') NOT NULL,
+    Reason TEXT NULL,
+    Status ENUM('REQUESTED','APPROVED','REJECTED','COMPLETED') NOT NULL DEFAULT 'REQUESTED',
+    CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UpdatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_active_order_request (OrderId),
+    FOREIGN KEY (OrderId) REFERENCES Orders(Id) ON DELETE CASCADE,
+    FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+}
 
 async function ensureStoreSettingsTable() {
   await pool.execute(`
@@ -494,11 +529,29 @@ async function ensureStoreSettingsTable() {
 async function getStoreSettings() {
   await ensureStoreSettingsTable();
   const [rows] = await pool.execute('SELECT SettingKey AS settingKey, SettingValue AS settingValue FROM StoreSettings');
-  return rows.reduce((settings, row) => {
+  const settings = rows.reduce((settings, row) => {
     settings[row.settingKey] = row.settingValue;
     return settings;
   }, { ...defaultStoreSettings });
+  if (!settings.storePhone) settings.storePhone = defaultStoreSettings.storePhone;
+  if (!settings.storeAddress) settings.storeAddress = defaultStoreSettings.storeAddress;
+  return settings;
 }
+
+app.get('/api/store-info', async (req, res) => {
+  try {
+    const settings = await getStoreSettings();
+    return res.json({
+      storeName: settings.storeName || defaultStoreSettings.storeName,
+      storePhone: settings.storePhone || defaultStoreSettings.storePhone,
+      storeEmail: settings.storeEmail,
+      storeAddress: settings.storeAddress || defaultStoreSettings.storeAddress
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể tải thông tin cửa hàng.' });
+  }
+});
 
 async function ensureNotificationsTable() {
   await pool.execute(`
@@ -678,11 +731,19 @@ app.get('/api/products', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 48);
     const category = typeof req.query.category === 'string' ? req.query.category.trim() : '';
+    const search = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
+    const sortOptions = { newest: 'p.CreatedAt DESC, p.Id DESC', price_asc: 'p.Price ASC, p.Id DESC', price_desc: 'p.Price DESC, p.Id DESC' };
+    const orderBy = sortOptions[req.query.sort] || sortOptions.newest;
     const parameters = [];
     let categoryFilter = '';
     if (category) {
       categoryFilter = ' AND c.Name = ?';
       parameters.push(category);
+    }
+    let searchFilter = '';
+    if (search) {
+      searchFilter = ' AND (p.Title LIKE ? OR p.SKU LIKE ? OR p.Description LIKE ?)';
+      parameters.push(...Array(3).fill(`%${search}%`));
     }
     const [products] = await pool.execute(
       `SELECT p.Id AS id,
@@ -698,7 +759,8 @@ app.get('/api/products', async (req, res) => {
        LEFT JOIN Categories c ON c.Id = p.CategoryId
        WHERE p.IsActive = 1
        ${categoryFilter}
-       ORDER BY p.CreatedAt DESC, p.Id DESC
+       ${searchFilter}
+       ORDER BY ${orderBy}
        LIMIT ${limit}`,
       parameters
     );
@@ -742,14 +804,24 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 app.post('/api/orders', authenticateToken, async (req, res) => {
-  const { productVariantId, quantity = 1, recipientName, recipientPhone, recipientAddress, paymentMethod = 'COD', note } = req.body;
-  const orderQuantity = Number(quantity);
-  if (!productVariantId || !Number.isInteger(orderQuantity) || orderQuantity < 1 || !recipientName?.trim() || !recipientPhone?.trim() || !recipientAddress?.trim() || !['COD', 'VNPAY'].includes(paymentMethod)) {
-    return res.status(400).json({ message: 'Vui lòng nhập đầy đủ thông tin nhận hàng.' });
+  const { items, recipientName, recipientPhone, recipientAddress, note } = req.body;
+  if (!Array.isArray(items) || !items.length || items.length > 50 || !recipientName?.trim() ||
+      !recipientPhone?.trim() || !recipientAddress?.trim()) {
+    return res.status(400).json({ message: 'Vui lòng chọn sản phẩm và nhập đầy đủ thông tin nhận hàng.' });
+  }
+  const quantitiesByVariant = new Map();
+  for (const item of items) {
+    const variantId = Number(item.productVariantId);
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(variantId) || variantId < 1 || !Number.isInteger(quantity) || quantity < 1) {
+      return res.status(400).json({ message: 'Sản phẩm hoặc số lượng không hợp lệ.' });
+    }
+    quantitiesByVariant.set(variantId, (quantitiesByVariant.get(variantId) || 0) + quantity);
   }
   const userId = req.user.id;
   let connection;
   try {
+    await ensureOrderFulfillmentSchema();
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const settings = await getStoreSettings();
@@ -757,46 +829,45 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
       await connection.rollback();
       return res.status(503).json({ message: 'Cửa hàng đang tạm ngừng nhận đơn.' });
     }
-    if ((paymentMethod === 'COD' && settings.enableCod !== 'true') ||
-        (paymentMethod === 'VNPAY' && settings.enableVnpay !== 'true')) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'Phương thức thanh toán này hiện không khả dụng.' });
-    }
+    const variantIds = [...quantitiesByVariant.keys()];
+    const placeholders = variantIds.map(() => '?').join(',');
     const [variants] = await connection.execute(
-      `SELECT v.Id AS id, v.StockQty AS stockQty, COALESCE(v.Price, p.Price) AS unitPrice
+      `SELECT v.Id AS id, v.StockQty AS stockQty, COALESCE(v.Price, p.Price) AS unitPrice, p.Title AS title
        FROM ProductVariants v INNER JOIN Products p ON p.Id = v.ProductId
-       WHERE v.Id = ? AND p.IsActive = 1 FOR UPDATE`,
-      [productVariantId]
+       WHERE v.Id IN (${placeholders}) AND p.IsActive = 1 FOR UPDATE`,
+      variantIds
     );
-    if (!variants.length) {
+    if (variants.length !== variantIds.length) {
       await connection.rollback();
-      return res.status(404).json({ message: 'Biến thể sản phẩm không còn tồn tại.' });
+      return res.status(404).json({ message: 'Một sản phẩm đã ngừng bán hoặc không còn tồn tại.' });
     }
-    const variant = variants[0];
-    if (variant.stockQty < orderQuantity) {
-      await connection.rollback();
-      return res.status(409).json({ message: `Chỉ còn ${variant.stockQty} sản phẩm trong kho.` });
+    let subtotal = 0;
+    for (const variant of variants) {
+      const quantity = quantitiesByVariant.get(Number(variant.id));
+      if (Number(variant.stockQty) < quantity) {
+        await connection.rollback();
+        return res.status(409).json({ message: `${variant.title} chỉ còn ${variant.stockQty} sản phẩm.` });
+      }
+      subtotal += Number(variant.unitPrice) * quantity;
     }
-    const unitPrice = Number(variant.unitPrice);
-    const itemTotal = unitPrice * orderQuantity;
-    const shippingFee = Math.max(0, Number(settings.shippingFee) || 0);
-    const freeShippingThreshold = Math.max(0, Number(settings.freeShippingThreshold) || 0);
-    const appliedShippingFee = freeShippingThreshold > 0 && itemTotal >= freeShippingThreshold ? 0 : shippingFee;
-    const totalAmount = itemTotal + appliedShippingFee;
     const orderCode = `OWEN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const [orderResult] = await connection.execute(
       `INSERT INTO Orders (OrderCode, UserId, RecipientName, RecipientPhone, RecipientAddress,
-                           PaymentMethod, Status, TotalAmount, Note)
-       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
-      [orderCode, userId, recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), paymentMethod, totalAmount, note?.trim() || null]
+                           PaymentMethod, Status, SubtotalAmount, ShippingFee, TotalAmount, Note)
+       VALUES (?, ?, ?, ?, ?, 'VNPAY', 'UNPAID', ?, NULL, ?, ?)`,
+      [orderCode, userId, recipientName.trim(), recipientPhone.trim(), recipientAddress.trim(), subtotal, subtotal, note?.trim() || null]
     );
-    await connection.execute(
-      'INSERT INTO OrderItems (OrderId, ProductVariantId, Quantity, UnitPrice, TotalPrice) VALUES (?, ?, ?, ?, ?)',
-      [orderResult.insertId, productVariantId, orderQuantity, unitPrice, itemTotal]
-    );
-    await connection.execute('UPDATE ProductVariants SET StockQty = StockQty - ? WHERE Id = ?', [orderQuantity, productVariantId]);
+    for (const variant of variants) {
+      const quantity = quantitiesByVariant.get(Number(variant.id));
+      const unitPrice = Number(variant.unitPrice);
+      await connection.execute(
+        'INSERT INTO OrderItems (OrderId, ProductVariantId, Quantity, UnitPrice, TotalPrice) VALUES (?, ?, ?, ?, ?)',
+        [orderResult.insertId, variant.id, quantity, unitPrice, unitPrice * quantity]
+      );
+      await connection.execute('UPDATE ProductVariants SET StockQty = StockQty - ? WHERE Id = ?', [quantity, variant.id]);
+    }
     await connection.commit();
-    return res.status(201).json({ id: orderResult.insertId, orderCode, status: 'PENDING', totalAmount });
+    return res.status(201).json({ id: orderResult.insertId, orderCode, status: 'UNPAID', subtotal, totalAmount: subtotal });
   } catch (err) {
     if (connection) await connection.rollback();
     console.error(err);
@@ -810,9 +881,15 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
 app.get('/api/orders', authenticateToken, async (req, res) => {
   try {
     await ensureRewardPointsSchema();
+    await ensureOrderFulfillmentSchema();
+    await ensureReturnRequestsTable();
     const [rows] = await pool.execute(
       `SELECT o.Id AS id, o.OrderCode AS orderCode, o.Status AS status,
               o.TotalAmount AS totalAmount, o.PaymentMethod AS paymentMethod, o.PointsUsed AS pointsUsed,
+              o.SubtotalAmount AS subtotalAmount, o.ShippingFee AS shippingFee,
+              o.Carrier AS carrier, o.TrackingCode AS trackingCode,
+              o.PaymentConfirmedAt AS paymentConfirmedAt, o.DeliveredAt AS deliveredAt,
+              rr.Status AS returnStatus, rr.RequestType AS returnType,
               o.CreatedAt AS createdAt, oi.Quantity AS quantity,
               oi.UnitPrice AS unitPrice, p.Title AS productTitle,
               p.ImageUrl AS imageUrl, c.Name AS colorName, s.Value AS size
@@ -822,11 +899,26 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
        INNER JOIN Products p ON p.Id = v.ProductId
        INNER JOIN Colors c ON c.Id = v.ColorId
        INNER JOIN Sizes s ON s.Id = v.SizeId
+       LEFT JOIN ReturnRequests rr ON rr.OrderId = o.Id
        WHERE o.UserId = ?
        ORDER BY o.CreatedAt DESC, oi.Id`,
       [req.user.id]
     );
-    return res.json({ orders: rows });
+    const orders = [];
+    const byId = new Map();
+    for (const row of rows) {
+      if (!byId.has(row.id)) {
+        const order = { ...row, items: [] };
+        delete order.productTitle; delete order.imageUrl; delete order.colorName;
+        delete order.size; delete order.quantity; delete order.unitPrice;
+        byId.set(row.id, order); orders.push(order);
+      }
+      byId.get(row.id).items.push({
+        productTitle: row.productTitle, imageUrl: row.imageUrl, colorName: row.colorName,
+        size: row.size, quantity: row.quantity, unitPrice: row.unitPrice
+      });
+    }
+    return res.json({ orders });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Không thể tải giỏ hàng.' });
@@ -885,6 +977,32 @@ app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
     return res.status(500).json({ message: 'Không thể hủy đơn hàng.' });
   } finally {
     if (connection) connection.release();
+  }
+});
+
+app.post('/api/orders/:id/return-request', authenticateToken, async (req, res) => {
+  const { requestType, reason } = req.body || {};
+  if (!['SIZE_EXCHANGE', 'RETURN'].includes(requestType)) {
+    return res.status(400).json({ message: 'Loại yêu cầu không hợp lệ.' });
+  }
+  try {
+    await ensureOrderFulfillmentSchema();
+    await ensureReturnRequestsTable();
+    const [orders] = await pool.execute(
+      `SELECT Id FROM Orders WHERE Id = ? AND UserId = ? AND Status = 'DELIVERED'
+       AND DeliveredAt IS NOT NULL AND DeliveredAt >= DATE_SUB(NOW(), INTERVAL 7 DAY)`,
+      [req.params.id, req.user.id]
+    );
+    if (!orders.length) return res.status(409).json({ message: 'Đơn không còn trong thời hạn đổi trả 7 ngày.' });
+    await pool.execute(
+      'INSERT INTO ReturnRequests (OrderId, UserId, RequestType, Reason) VALUES (?, ?, ?, ?)',
+      [req.params.id, req.user.id, requestType, reason?.trim() || null]
+    );
+    return res.status(201).json({ message: 'Đã gửi yêu cầu. Shop sẽ liên hệ qua số điện thoại của đơn hàng.' });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Đơn hàng đã có yêu cầu đổi trả.' });
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể gửi yêu cầu đổi trả.' });
   }
 });
 
@@ -1358,6 +1476,8 @@ app.delete('/api/admin/users/:id', authenticateToken, isAdmin, async (req, res) 
 app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
   try {
     await ensureRewardPointsSchema();
+    await ensureOrderFulfillmentSchema();
+    await ensureReturnRequestsTable();
     const [rows] = await pool.execute(`
       SELECT o.Id as id,
              o.OrderCode as orderCode,
@@ -1369,10 +1489,19 @@ app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
              o.Status as status,
              o.PaymentMethod as paymentMethod,
              o.PointsUsed as pointsUsed,
+             o.SubtotalAmount as subtotalAmount,
+             o.ShippingFee as shippingFee,
+             o.Carrier as carrier,
+             o.TrackingCode as trackingCode,
+             o.PaymentConfirmedAt as paymentConfirmedAt,
+             o.DeliveredAt as deliveredAt,
+             rr.Status as returnStatus,
+             rr.RequestType as returnType,
              o.TotalAmount as totalAmount,
              o.CreatedAt as createdAt
       FROM Orders o
       LEFT JOIN Users u ON u.Id = o.UserId
+      LEFT JOIN ReturnRequests rr ON rr.OrderId = o.Id
       ORDER BY o.CreatedAt DESC
     `);
     return res.json({ orders: rows });
@@ -1383,16 +1512,21 @@ app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
 });
 
 app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) => {
-  const { status } = req.body;
-  if (!isValidOrderStatus(status)) return res.status(400).json({ message: 'Trạng thái đơn hàng không hợp lệ.' });
+  const { status, shippingFee, carrier, trackingCode } = req.body;
+  if (status && !isValidOrderStatus(status)) return res.status(400).json({ message: 'Trạng thái đơn hàng không hợp lệ.' });
+  if (shippingFee !== undefined && (!Number.isFinite(Number(shippingFee)) || Number(shippingFee) < 0)) {
+    return res.status(400).json({ message: 'Phí vận chuyển không hợp lệ.' });
+  }
+  if (carrier && !['J&T', 'SPX'].includes(carrier)) return res.status(400).json({ message: 'Đơn vị vận chuyển không hợp lệ.' });
   let connection;
   try {
     await ensureNotificationsTable();
     await ensureRewardPointsSchema();
+    await ensureOrderFulfillmentSchema();
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [orders] = await connection.execute(
-      'SELECT Status AS status, UserId AS userId, OrderCode AS orderCode, PaymentMethod AS paymentMethod, PointsUsed AS pointsUsed FROM Orders WHERE Id = ? FOR UPDATE',
+      'SELECT Status AS status, UserId AS userId, OrderCode AS orderCode, PaymentMethod AS paymentMethod, PointsUsed AS pointsUsed, COALESCE(SubtotalAmount, TotalAmount) AS subtotalAmount FROM Orders WHERE Id = ? FOR UPDATE',
       [req.params.id]
     );
     if (!orders.length) {
@@ -1400,6 +1534,19 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
       return res.status(404).json({ message: 'Không tìm thấy đơn hàng.' });
     }
     const currentStatus = orders[0].status;
+    if (shippingFee !== undefined) {
+      await connection.execute(
+        'UPDATE Orders SET ShippingFee = ?, TotalAmount = COALESCE(SubtotalAmount, TotalAmount) + ?, Carrier = COALESCE(?, Carrier), TrackingCode = COALESCE(?, TrackingCode) WHERE Id = ?',
+        [Number(shippingFee), Number(shippingFee), carrier || null, trackingCode?.trim() || null, req.params.id]
+      );
+    } else if (carrier || trackingCode !== undefined) {
+      await connection.execute('UPDATE Orders SET Carrier = COALESCE(?, Carrier), TrackingCode = ? WHERE Id = ?',
+        [carrier || null, trackingCode?.trim() || null, req.params.id]);
+    }
+    if (!status) {
+      await connection.commit();
+      return res.json({ affectedRows: 1 });
+    }
     const allowedTransitions = {
       UNPAID: ['PENDING', 'CANCELLED'],
       PENDING: ['SHIPPING', 'CANCELLED'],
@@ -1433,7 +1580,9 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
         }
       }
     }
-    const [result] = await connection.execute('UPDATE Orders SET Status = ? WHERE Id = ?', [status, req.params.id]);
+    const timestampUpdates = status === 'PENDING' ? ', PaymentConfirmedAt = COALESCE(PaymentConfirmedAt, NOW())' :
+      status === 'DELIVERED' ? ', DeliveredAt = COALESCE(DeliveredAt, NOW())' : '';
+    const [result] = await connection.query(`UPDATE Orders SET Status = ?${timestampUpdates} WHERE Id = ?`, [status, req.params.id]);
     if (status === 'DELIVERED' && currentStatus !== 'DELIVERED' && orders[0].userId && orders[0].paymentMethod !== 'POINTS') {
       const [rewardResult] = await connection.execute(
         `INSERT IGNORE INTO RewardTransactions
@@ -1487,6 +1636,22 @@ app.put('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) =>
 
 app.delete('/api/admin/orders/:id', authenticateToken, isAdmin, async (req, res) => {
   return res.status(405).json({ message: 'Đơn hàng là lịch sử giao dịch và không thể xóa. Hãy hủy đơn nếu cần.' });
+});
+
+app.put('/api/admin/orders/:id/return-request', authenticateToken, isAdmin, async (req, res) => {
+  const { status } = req.body || {};
+  if (!['APPROVED', 'REJECTED', 'COMPLETED'].includes(status)) {
+    return res.status(400).json({ message: 'Trạng thái đổi trả không hợp lệ.' });
+  }
+  try {
+    await ensureReturnRequestsTable();
+    const [result] = await pool.execute('UPDATE ReturnRequests SET Status = ? WHERE OrderId = ?', [status, req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ message: 'Không tìm thấy yêu cầu đổi trả.' });
+    return res.json({ affectedRows: result.affectedRows });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Không thể cập nhật yêu cầu đổi trả.' });
+  }
 });
 
 app.get('/api/admin/settings', authenticateToken, isAdmin, async (req, res) => {

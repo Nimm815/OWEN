@@ -258,7 +258,7 @@ function renderSettings(settings, account) {
         <div class="settings-card-heading section-gap"><h3>Cài đặt đơn hàng</h3><p>Điều khiển tồn kho và quyền hủy đơn.</p></div>
         <div class="settings-row">
           <label>Ngưỡng cảnh báo tồn kho<input name="lowStockThreshold" type="number" min="0" value="${escapeHtml(settings.lowStockThreshold)}" required></label>
-          <label>Phí giao hàng mặc định<input name="shippingFee" type="number" min="0" value="${escapeHtml(settings.shippingFee)}" required></label>
+          <label>Phí giao hàng dự phòng<input name="shippingFee" type="number" min="0" value="${escapeHtml(settings.shippingFee)}" required><small>Đơn thực tế được báo giá riêng theo J&amp;T/SPX.</small></label>
         </div>
         <label>Miễn phí vận chuyển từ<input name="freeShippingThreshold" type="number" min="0" value="${escapeHtml(settings.freeShippingThreshold || 0)}" required><small>Nhập 0 nếu không áp dụng.</small></label>
         <div class="payment-switches">
@@ -268,7 +268,7 @@ function renderSettings(settings, account) {
           </label>
           <label class="setting-switch">
             <input name="enableVnpay" type="checkbox" ${settings.enableVnpay !== 'false' ? 'checked' : ''}>
-            <span><strong>Thanh toán VNPay</strong><small>Thanh toán trực tuyến.</small></span>
+            <span><strong>Thanh toán QR VietinBank</strong><small>Shop xác nhận giao dịch thủ công.</small></span>
           </label>
         </div>
         <label class="setting-switch">
@@ -430,19 +430,46 @@ function userForm(user = {}) {
 function renderOrders(orders) {
   pageArea.innerHTML = '<div class="page-toolbar"><h2>Đơn hàng khách đặt</h2></div><div id="tableMount"></div>';
   const mount = document.getElementById('tableMount');
-  const statusLabels = { UNPAID: 'Chưa thanh toán', PENDING: 'Chờ xác nhận', SHIPPING: 'Đang giao hàng', DELIVERED: 'Đã hoàn thành', CANCELLED: 'Đã hủy' };
+  const statusLabels = { UNPAID: 'Chờ báo phí / thanh toán', PENDING: 'Đã thanh toán', SHIPPING: 'Đang giao hàng', DELIVERED: 'Đã hoàn thành', CANCELLED: 'Đã hủy' };
   const buttons = order => {
-    if (order.status === 'PENDING' || order.status === 'UNPAID') return `${actionButton('Xác nhận', 'btn-primary', 'confirm', order.id)}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}`;
-    if (order.status === 'SHIPPING') return `${actionButton('Hoàn thành', 'btn-primary', 'complete', order.id)}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}`;
-    return '';
+    const returnActions = order.returnStatus === 'REQUESTED'
+      ? `${actionButton('Duyệt đổi/trả', 'btn-primary', 'approve-return', order.id)}${actionButton('Từ chối', 'btn-danger', 'reject-return', order.id)}`
+      : order.returnStatus === 'APPROVED' ? actionButton('Hoàn tất đổi/trả', 'btn-primary', 'complete-return', order.id) : '';
+    if (order.status === 'UNPAID') return `${actionButton('Báo phí ship', '', 'quote', order.id)}${order.shippingFee !== null ? actionButton('Đã nhận tiền', 'btn-primary', 'paid', order.id) : ''}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}${returnActions}`;
+    if (order.status === 'PENDING') return `${actionButton('Giao hàng', 'btn-primary', 'ship', order.id)}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}${returnActions}`;
+    if (order.status === 'SHIPPING') return `${actionButton('Giao thành công', 'btn-primary', 'complete', order.id)}${actionButton('Hủy đơn', 'btn-danger', 'cancel', order.id)}${returnActions}`;
+    return returnActions;
   };
-  mount.innerHTML = orders.length ? `<div class="table-responsive"><table><thead><tr><th>Mã đơn</th><th>Người nhận</th><th>Điện thoại</th><th>Địa chỉ</th><th>Trạng thái</th><th>Thanh toán</th><th>Tổng tiền</th><th>Ngày đặt</th><th></th></tr></thead><tbody>${orders.map(o => `<tr><td>${escapeHtml(o.orderCode)}</td><td>${escapeHtml(o.recipientName || o.customerName)}</td><td>${escapeHtml(o.recipientPhone)}</td><td>${escapeHtml(o.recipientAddress)}</td><td><span class="order-status status-${o.status.toLowerCase()}">${statusLabels[o.status] || escapeHtml(o.status)}</span></td><td>${o.paymentMethod === 'POINTS' ? `${Number(o.pointsUsed)} điểm` : escapeHtml(o.paymentMethod)}</td><td>${Number(o.totalAmount).toLocaleString('vi-VN')} đ</td><td>${formatDate(o.createdAt)}</td><td class="row-actions">${buttons(o)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Chưa có đơn hàng nào.</div>';
+  mount.innerHTML = orders.length ? `<div class="table-responsive"><table><thead><tr><th>Mã đơn</th><th>Người nhận</th><th>Liên hệ & địa chỉ</th><th>Trạng thái</th><th>Vận chuyển</th><th>Tổng tiền</th><th>Ngày đặt</th><th></th></tr></thead><tbody>${orders.map(o => `<tr><td>${escapeHtml(o.orderCode)}${o.returnStatus ? `<br><small class="return-alert">${o.returnType === 'SIZE_EXCHANGE' ? 'Đổi size' : 'Trả hàng'} · ${escapeHtml(o.returnStatus)}</small>` : ''}</td><td>${escapeHtml(o.recipientName || o.customerName)}</td><td>${escapeHtml(o.recipientPhone)}<br><small>${escapeHtml(o.recipientAddress)}</small></td><td><span class="order-status status-${o.status.toLowerCase()}">${statusLabels[o.status] || escapeHtml(o.status)}</span></td><td>${escapeHtml(o.carrier || 'Chưa chọn')}<br><small>${o.shippingFee === null ? 'Chưa báo phí' : `Phí ${formatCurrency(o.shippingFee)}`}${o.trackingCode ? ` · ${escapeHtml(o.trackingCode)}` : ''}</small></td><td>${formatCurrency(o.totalAmount)}</td><td>${formatDate(o.createdAt)}</td><td class="row-actions">${buttons(o)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Chưa có đơn hàng nào.</div>';
   mount.onclick = async event => {
     const button = event.target.closest('[data-action]'); if (!button) return;
     const order = orders.find(item => item.id === Number(button.dataset.id));
-    const nextStatus = button.dataset.action === 'confirm'
-      ? (order.status === 'UNPAID' ? 'PENDING' : 'SHIPPING')
-      : { complete: 'DELIVERED', cancel: 'CANCELLED' }[button.dataset.action];
+    const returnStatus = { 'approve-return': 'APPROVED', 'reject-return': 'REJECTED', 'complete-return': 'COMPLETED' }[button.dataset.action];
+    if (returnStatus) {
+      try {
+        await request(`/api/admin/orders/${order.id}/return-request`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: returnStatus }) });
+        return loadPage('orders');
+      } catch (error) { return window.alert(error.message); }
+    }
+    if (button.dataset.action === 'quote') {
+      return showForm(`Báo phí vận chuyển · ${order.orderCode}`, [
+        { name: 'carrier', label: 'Đơn vị vận chuyển', type: 'select', value: order.carrier || 'J&T', required: true, options: [{ value: 'J&T', label: 'J&T Express' }, { value: 'SPX', label: 'SPX Express' }] },
+        { name: 'shippingFee', label: 'Phí vận chuyển (đ)', type: 'number', value: order.shippingFee ?? '', required: true }
+      ], async data => {
+        await request(`/api/admin/orders/${order.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+        announceOrderUpdate(order.id, order.status); loadPage('orders');
+      });
+    }
+    if (button.dataset.action === 'ship') {
+      return showForm(`Giao đơn · ${order.orderCode}`, [
+        { name: 'carrier', label: 'Đơn vị vận chuyển', type: 'select', value: order.carrier || 'J&T', required: true, options: [{ value: 'J&T', label: 'J&T Express' }, { value: 'SPX', label: 'SPX Express' }] },
+        { name: 'trackingCode', label: 'Mã vận đơn', value: order.trackingCode || '', required: true }
+      ], async data => {
+        await request(`/api/admin/orders/${order.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...data, status: 'SHIPPING' }) });
+        announceOrderUpdate(order.id, 'SHIPPING'); loadPage('orders');
+      });
+    }
+    const nextStatus = { paid: 'PENDING', complete: 'DELIVERED', cancel: 'CANCELLED' }[button.dataset.action];
     if (!nextStatus) return;
     if (button.dataset.action === 'cancel' && !window.confirm(`Hủy đơn ${order.orderCode}? Số lượng sản phẩm sẽ được hoàn lại kho.`)) return;
     try {
